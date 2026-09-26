@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>TrendBot</title>
+  <meta name="description" content="Trend-following trading bot for Binance, Bybit and Alpaca.">
+  <meta name="theme-color" content="#1a2a44">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="icons/icon-192.png">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <script>
+    // Apply a saved theme before the page paints, so there's no flash.
+    try { const t = localStorage.getItem("tb-theme"); if (t) document.documentElement.dataset.theme = t; } catch (e) {}
+  </script>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar-inner">
+      <a class="brand" href="#/bots"><img src="icons/icon.svg" alt="">TrendBot</a>
+      <nav class="tabs" id="tabs">
+        <a href="#/bots" data-tab="bots">Bots</a>
+        <a href="#/backtest" data-tab="backtest">Backtest</a>
+        <a href="#/setup" data-tab="setup">Setup</a>
+      </nav>
+      <div class="spacer"></div>
+      <button class="icon-btn" id="theme-btn" type="button" title="Switch light / dark theme" aria-label="Switch theme"><svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6.25" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M8 1.75a6.25 6.25 0 0 1 0 12.5z" fill="currentColor"/></svg></button>
+    </div>
+  </header>
+
+  <main id="view">
+    <div class="loading"><span class="spinner"></span> Loading…</div>
+  </main>
+
+  <footer class="disclaimer">
+    TrendBot is a tool, not financial advice. Trading is risky: the bot can and will lose money on some trades,
+    and past or backtested results don't guarantee future profit. Only trade money you can afford to lose.
+  </footer>
+
+  <div class="toasts" id="toasts" aria-live="polite"></div>
+
+  <noscript>TrendBot needs JavaScript enabled.</noscript>
+  <script src="app.js"></script>
+</body>
+</html>
