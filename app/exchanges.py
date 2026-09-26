@@ -40,8 +40,8 @@ def _now_ms() -> int:
 
 def _missing_keys_error(exchange: str, mode: str) -> MarketError:
     key_name, secret_name = key_env_names(exchange, mode)
-    return MarketError(f"{EXCHANGES[exchange]['label']} {mode} needs API keys: set {key_name} and "
-                       f"{secret_name} in the .env file, then restart the app.")
+    return MarketError(f"{EXCHANGES[exchange]['label']} {mode} isn't connected yet. Connect it on the Setup "
+                       f"page (or set {key_name} and {secret_name} in the .env file and restart).")
 
 
 # --------------------------------------------------------------------------- crypto (ccxt)
@@ -194,9 +194,8 @@ class AlpacaMarket:
                 key, secret = api_keys("alpaca", "live")
                 base = "https://api.alpaca.markets"
         if not key:
-            raise MarketError("Stock data comes from Alpaca and needs free API keys. Create a free Alpaca "
-                              "paper account and set ALPACA_TESTNET_API_KEY and ALPACA_TESTNET_API_SECRET "
-                              "in the .env file, then restart the app.")
+            raise MarketError("Stock data comes from Alpaca, which needs a free account. Create a free Alpaca "
+                              "paper account and connect it on the Setup page (Alpaca, Paper account).")
         self.base = base
         self.s = requests.Session()
         self.s.headers.update({"APCA-API-KEY-ID": key, "APCA-API-SECRET-KEY": secret})
@@ -329,6 +328,84 @@ class PaperBroker:
         gross = qty * price
         fee = gross * self.fee
         return Fill(qty=qty, price=price, quote=gross - fee, fee=fee)
+
+
+# --------------------------------------------------------------------------- connecting accounts
+
+def _crypto_balances(balance: dict) -> list[dict]:
+    totals = {k: v for k, v in (balance.get("total") or {}).items() if v}
+    order = {"USDT": 0, "USDC": 1, "BTC": 2, "ETH": 3}
+    assets = sorted(totals, key=lambda a: (order.get(a, 9), -totals[a]))[:6]
+    return [{"asset": a, "free": float((balance.get("free") or {}).get(a) or 0), "total": float(totals[a])}
+            for a in assets]
+
+
+def _check_binance_permissions(ex, warnings: list) -> None:
+    r = ex.sapi_get_account_apirestrictions()
+    if r.get("enableWithdrawals"):
+        raise MarketError("This key allows withdrawals. For your safety TrendBot won't use it: edit the key on "
+                          "Binance, untick 'Enable Withdrawals', then connect again.")
+    if not r.get("enableSpotAndMarginTrading"):
+        raise MarketError("This key can't trade. Edit it on Binance and tick 'Enable Spot & Margin Trading'.")
+    if not r.get("ipRestrict"):
+        warnings.append("Tip: restrict this key to your IP address on Binance for extra safety.")
+
+
+def _check_bybit_permissions(ex, warnings: list) -> None:
+    r = (ex.private_get_v5_user_query_api() or {}).get("result") or {}
+    perms = r.get("permissions") or {}
+    if any("withdraw" in str(p).lower() for p in perms.values()):
+        raise MarketError("This key allows withdrawals. For your safety TrendBot won't use it: create a key "
+                          "without the Withdraw permission, then connect again.")
+    if str(r.get("readOnly")) == "1" or "SpotTrade" not in (perms.get("Spot") or []):
+        raise MarketError("This key can't trade spot. Edit it on Bybit: choose 'Read-Write' and tick Spot trading.")
+    if not [ip for ip in (r.get("ips") or []) if ip and ip != "*"]:
+        warnings.append("Tip: restrict this key to your IP address on Bybit for extra safety.")
+
+
+def verify_account(exchange: str, mode: str, key: str, secret: str) -> dict:
+    """Log in with the given keys and check them. Raises MarketError with a plain-language reason."""
+    warnings: list[str] = []
+    if exchange == "alpaca":
+        base = "https://api.alpaca.markets" if mode == "live" else "https://paper-api.alpaca.markets"
+        r = requests.get(base + "/v2/account", timeout=20,
+                         headers={"APCA-API-KEY-ID": key, "APCA-API-SECRET-KEY": secret})
+        if r.status_code in (401, 403):
+            other = "live" if mode != "live" else "paper"
+            raise MarketError(f"Alpaca rejected these keys. Check they were copied fully and that they're "
+                              f"{'live' if mode == 'live' else 'paper'}-account keys, not {other} keys.")
+        if r.status_code >= 400:
+            raise MarketError(f"Alpaca error {r.status_code}: {r.text[:200]}")
+        acct = r.json()
+        if acct.get("trading_blocked") or acct.get("account_blocked"):
+            raise MarketError("Alpaca says this account is blocked from trading.")
+        return {"balances": [{"asset": "USD cash", "free": float(acct.get("cash") or 0),
+                              "total": float(acct.get("equity") or 0)}], "warnings": warnings}
+
+    ex = getattr(ccxt, exchange)({"apiKey": key, "secret": secret, "enableRateLimit": True,
+                                  "options": {"defaultType": "spot"}})
+    if mode == "testnet":
+        ex.set_sandbox_mode(True)
+    try:
+        balance = ex.fetch_balance()
+    except ccxt.AuthenticationError:
+        where = "the testnet site" if mode == "testnet" else "your real account"
+        raise MarketError(f"{EXCHANGES[exchange]['label']} rejected this key. Check it was copied fully and that "
+                          f"it was made on {where}. Testnet and real keys are different.")
+    except ccxt.PermissionDenied as exc:
+        raise MarketError(f"{EXCHANGES[exchange]['label']} refused access: {str(exc)[:200]}")
+    try:
+        if exchange == "binance" and mode == "live":
+            _check_binance_permissions(ex, warnings)
+        elif exchange == "bybit":
+            _check_bybit_permissions(ex, warnings)
+    except MarketError:
+        raise
+    except Exception:
+        if mode == "live":
+            warnings.append("Couldn't read this key's permissions. Please check on the exchange that "
+                            "withdrawals are switched OFF for it.")
+    return {"balances": _crypto_balances(balance), "warnings": warnings}
 
 
 def make_market(exchange: str, mode: str):

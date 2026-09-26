@@ -14,9 +14,10 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, model_validator
 
-from .config import DATA_DIR, EXCHANGES, MODES, POLL_SECONDS, TIMEFRAMES, WEB_DIR, keys_status, load_dotenv
+from .config import (DATA_DIR, EXCHANGES, MODES, POLL_SECONDS, TIMEFRAMES, WEB_DIR, api_keys, key_source,
+                     keys_status, load_dotenv, remove_account, save_account)
 from .engine import BotManager, BotNotFound
-from .exchanges import ALPACA_BARS_PER_DAY, MarketError, make_market
+from .exchanges import ALPACA_BARS_PER_DAY, MarketError, make_market, verify_account
 from .strategy import Params, backtest, warmup_bars
 
 load_dotenv()
@@ -64,6 +65,13 @@ async def guard(request: Request, call_next):
 @app.exception_handler(MarketError)
 async def market_error(_req, exc: MarketError):
     return JSONResponse({"detail": str(exc)}, 400)
+
+
+@app.exception_handler(ccxt.NetworkError)
+async def exchange_unreachable(_req, exc: ccxt.NetworkError):
+    return JSONResponse({"detail": "Couldn't reach the exchange. Check your internet connection and try again (some exchanges "
+                                   "also block certain countries). "
+                                   f"({type(exc).__name__})"}, 502)
 
 
 @app.exception_handler(ccxt.BaseError)
@@ -129,6 +137,11 @@ class BacktestIn(StrategyFields):
 
 class LoginIn(BaseModel):
     password: str
+
+
+class AccountIn(BaseModel):
+    api_key: str = Field(min_length=8, max_length=200)
+    api_secret: str = Field(min_length=8, max_length=300)
 
 
 def _require_live_confirmation(body: BotConfigIn, previous_mode: str | None):
@@ -209,6 +222,65 @@ def close_position(bot_id: str):
 @app.get("/api/bots/{bot_id}/chart")
 def bot_chart(bot_id: str):
     return manager.get(bot_id).chart()
+
+
+def _account_target(exchange: str, mode: str) -> None:
+    if exchange not in EXCHANGES or mode not in ("testnet", "live"):
+        raise HTTPException(404, "Unknown account.")
+
+
+def _bots_blocking(exchange: str, mode: str) -> list[str]:
+    """Running bots that use this account (Alpaca paper bots also read prices through it)."""
+    return [b.config["name"] for b in manager.bots.values() if b.running and b.config["exchange"] == exchange
+            and (b.config["mode"] == mode or exchange == "alpaca")]
+
+
+@app.post("/api/accounts/{exchange}/{mode}")
+def connect_account(exchange: str, mode: str, body: AccountIn, request: Request):
+    _account_target(exchange, mode)
+    client = request.client.host if request.client else ""
+    secure = client in ("127.0.0.1", "::1") or request.url.scheme == "https" or \
+        request.headers.get("x-forwarded-proto") == "https"
+    if not secure:
+        raise HTTPException(403, "For safety, connect accounts on the computer running TrendBot (or over https), "
+                                 "not over your home network.")
+    if key_source(exchange, mode) == "env":
+        raise HTTPException(400, "This account's keys are set in the .env file. Remove them there to connect here.")
+    blocking = _bots_blocking(exchange, mode)
+    if blocking:
+        raise HTTPException(400, f"Stop these bots first: {', '.join(blocking)}.")
+    key, secret = body.api_key.strip(), body.api_secret.strip()
+    result = verify_account(exchange, mode, key, secret)
+    save_account(exchange, mode, key, secret)
+    for bot in manager.bots.values():
+        if bot.config["exchange"] == exchange and not bot.running:
+            bot.reset_connections()
+    return result
+
+
+@app.get("/api/accounts/{exchange}/{mode}")
+def account_balance(exchange: str, mode: str):
+    """Re-check a connected account and show its balances."""
+    _account_target(exchange, mode)
+    key, secret = api_keys(exchange, mode)
+    if not key:
+        raise HTTPException(404, "Not connected.")
+    return verify_account(exchange, mode, key, secret)
+
+
+@app.delete("/api/accounts/{exchange}/{mode}")
+def disconnect_account(exchange: str, mode: str):
+    _account_target(exchange, mode)
+    if key_source(exchange, mode) == "env":
+        raise HTTPException(400, "These keys come from the .env file. Delete them there and restart TrendBot.")
+    blocking = _bots_blocking(exchange, mode)
+    if blocking:
+        raise HTTPException(400, f"Stop these bots first: {', '.join(blocking)}.")
+    remove_account(exchange, mode)
+    for bot in manager.bots.values():
+        if bot.config["exchange"] == exchange and not bot.running:
+            bot.reset_connections()
+    return {"ok": True}
 
 
 _history_cache: dict[tuple, tuple[float, list]] = {}
