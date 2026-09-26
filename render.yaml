@@ -1,0 +1,36 @@
+# One-click setup for Render (render.com): New > Blueprint > pick this repository.
+# It needs a paid instance: free instances go to sleep, which would stop the bots,
+# and only paid instances can keep a disk for the bots' saved state.
+services:
+  - type: web
+    name: trendbot
+    runtime: docker
+    # Binance and Bybit block connections from US servers, so use a European region.
+    region: frankfurt
+    plan: starter
+    healthCheckPath: /api/meta
+    disk:
+      name: trendbot-data
+      mountPath: /data
+      sizeGB: 1
+    envVars:
+      # Required: the app is on the internet, so it must have a login password.
+      - key: BOT_UI_PASSWORD
+        sync: false
+      # Optional - add only what you use. Live keys: spot trading only, no withdrawals.
+      - key: BINANCE_TESTNET_API_KEY
+        sync: false
+      - key: BINANCE_TESTNET_API_SECRET
+        sync: false
+      - key: BINANCE_API_KEY
+        sync: false
+      - key: BINANCE_API_SECRET
+        sync: false
+      - key: BYBIT_TESTNET_API_KEY
+        sync: false
+      - key: BYBIT_TESTNET_API_SECRET
+        sync: false
+      - key: BYBIT_API_KEY
+        sync: false
+      - key: BYBIT_API_SECRET
+        sync: false

@@ -94,6 +94,30 @@ Don't open TrendBot to the internet (no port forwarding on your router).
 
 On the PC you can also install it like an app: in Chrome or Edge, *⋮ → Install TrendBot*.
 
+## Run it in the cloud 24/7 (optional)
+
+Running on your PC is free, but the bots stop when the PC sleeps. To keep them running all the time,
+put TrendBot on a cloud server. The repository is ready for [Render](https://render.com):
+
+1. Make a Render account and connect your GitHub account to it.
+2. In Render choose **New → Blueprint** and pick the TrendBot repository. It reads `render.yaml`
+   and sets everything up: a server in **Frankfurt** (Binance and Bybit block US servers), a small
+   disk that keeps your bots and trade history, and the settings below.
+3. It asks for **BOT_UI_PASSWORD**. Pick a long, random password (16+ characters) that you don't use
+   anywhere else, because this page is on the public internet. Leave the key fields empty to start
+   with paper trading. You can add keys later under the service's *Environment* tab.
+4. After it deploys, Render shows your link, e.g. `https://trendbot-xxxx.onrender.com`. Open it,
+   log in, and add it to your phone's home screen.
+
+Cost: it needs a paid instance (Render's cheapest always-on plan with a disk, a few dollars a month;
+check their current prices). Free instances fall asleep when nobody is looking, which would stop the bots.
+
+Safety in the cloud: your exchange keys sit on Render's servers, so live keys must allow **spot
+trading only, never withdrawals**. Also use the exchange's IP whitelist if it has one: Render lists
+its outbound IP addresses under the service's *Connect → Outbound* tab.
+
+Don't run the same bot on your PC and in the cloud at the same time. They'd trade the same money twice.
+
 ## Good to know
 
 - **Don't trade the same coin by hand** on the same account while a live bot holds it. The bot only
@@ -117,6 +141,7 @@ On the PC you can also install it like an app: in Chrome or Edge, *⋮ → Insta
 ## For the curious: what's inside
 
 ```
+Dockerfile         Cloud server image; render.yaml sets it up on Render
 start.bat          Windows launcher (creates .venv, installs packages, runs run.py)
 run.py             Starts the web server (options: --host, --port, --no-browser)
 app/strategy.py    The trading rules and the backtester (same rules for both)

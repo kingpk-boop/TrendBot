@@ -3,7 +3,8 @@ import os
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-DATA_DIR = ROOT / "data"
+# Cloud hosts point this at a persistent disk; locally it is the data/ folder.
+DATA_DIR = Path(os.environ.get("TRENDBOT_DATA_DIR") or ROOT / "data")
 BOTS_DIR = DATA_DIR / "bots"
 WEB_DIR = ROOT / "web"
 

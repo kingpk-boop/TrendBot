@@ -41,7 +41,8 @@ def main() -> int:
     ap = argparse.ArgumentParser(description="Run the TrendBot web app and bots.")
     ap.add_argument("--host", default="127.0.0.1",
                     help="address to listen on (default 127.0.0.1 = this computer only; 0.0.0.0 = your network)")
-    ap.add_argument("--port", type=int, default=8765, help="port (default 8765)")
+    ap.add_argument("--port", type=int, default=int(os.environ.get("PORT") or 8765),
+                    help="port (default 8765, or $PORT when a cloud host sets it)")
     ap.add_argument("--no-browser", action="store_true", help="don't open a browser window")
     args = ap.parse_args()
 
