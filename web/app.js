@@ -804,9 +804,9 @@ function openBotForm(bot = null, preset = null) {
     const hasKeys = mode === "paper" ? true : app.meta.keys[ex]?.[mode];
     let html = "";
     if (mode === "paper" && ex === "alpaca" && !app.meta.keys.alpaca.testnet && !app.meta.keys.alpaca.live)
-      html = `<div class="alert warn">Stock prices come from Alpaca, so even paper mode needs free Alpaca keys. See the Setup tab.</div>`;
+      html = `<div class="alert warn">Stock prices come from Alpaca, so even paper mode needs a free Alpaca paper account. Connect it on the <a href="#/setup">Setup</a> page.</div>`;
     else if (mode === "paper") html = `<div class="alert info">Paper mode: trades are simulated at real live prices with normal fees. Nothing is bought.</div>`;
-    else if (!hasKeys) html = `<div class="alert warn">No ${mode} API keys for ${esc(app.meta.exchanges[ex].label)} are set yet. Add them to the <code>.env</code> file and restart TrendBot (see Setup).</div>`;
+    else if (!hasKeys) html = `<div class="alert warn">Your ${esc(accountName(ex, mode))} isn't connected yet. Connect it on the <a href="#/setup">Setup</a> page first.</div>`;
     else if (mode === "live") html = `<div class="alert error">Live mode trades real money. You'll be asked to type LIVE to confirm.</div>`;
     else html = `<div class="alert info">Testnet: real orders on the exchange's practice account with fake balances.</div>`;
     $("#mode-note", dlg).innerHTML = html;
@@ -971,26 +971,133 @@ function showBacktest(r) {
 
 // ============================================================================ setup
 
+// Where to make keys, and which boxes to tick, per exchange and mode.
+const KEY_GUIDES = {
+  binance: {
+    testnet: { url: "https://testnet.binance.vision/", steps: [
+      "Open testnet.binance.vision and log in with GitHub.",
+      "Click “Generate HMAC_SHA256 Key”, give it any name.",
+      "Copy the API Key and Secret Key shown (the secret is shown only once)."] },
+    live: { url: "https://www.binance.com/en/my/settings/api-management", steps: [
+      "On Binance go to Account → API Management → Create API → System generated.",
+      "Edit restrictions: tick “Enable Spot & Margin Trading”. Leave “Enable Withdrawals” OFF.",
+      "Optional but safer: “Restrict access to trusted IPs only” and add your home IP.",
+      "Copy the API Key and Secret Key."] },
+  },
+  bybit: {
+    testnet: { url: "https://testnet.bybit.com/app/user/api-management", steps: [
+      "Make an account on testnet.bybit.com (separate from your real one).",
+      "Go to API → Create New Key → System-generated. Choose “Read-Write” and tick Spot trading.",
+      "Copy the API Key and Secret."] },
+    live: { url: "https://www.bybit.com/app/user/api-management", steps: [
+      "On Bybit go to Account → API → Create New Key → System-generated.",
+      "Choose “Read-Write”, tick Spot → Trade. Do NOT tick Withdraw or any Wallet transfer permissions.",
+      "Optional but safer: only allow your home IP.",
+      "Copy the API Key and Secret."] },
+  },
+  alpaca: {
+    testnet: { url: "https://app.alpaca.markets/signup", steps: [
+      "Sign up for free at alpaca.markets and open the Paper Trading dashboard.",
+      "On the right, under “API Keys”, click Generate New Keys.",
+      "Copy the Key and Secret."] },
+    live: { url: "https://app.alpaca.markets/", steps: [
+      "In your funded Alpaca live account open the dashboard (switch from Paper to Live).",
+      "Under “API Keys”, click Generate New Keys.",
+      "Copy the Key and Secret."] },
+  },
+};
+
+function accountName(ex, mode) {
+  const label = app.meta.exchanges[ex].label.replace(" (US stocks)", "");
+  if (ex === "alpaca") return `Alpaca ${mode === "live" ? "live account" : "paper account"}`;
+  return `${label} ${mode === "live" ? "account (real money)" : "testnet (practice)"}`;
+}
+
+function balancesHtml(res) {
+  const rows = (res.balances || []).map(b => `<b>${esc(fmtQty(b.total))}</b> ${esc(b.asset)}`);
+  const bal = rows.length ? `Balance: ${rows.join(" · ")}` : "Connected. The account is empty for now.";
+  return `<div class="small">${bal}</div>` +
+    (res.warnings || []).map(w => `<div class="alert warn" style="margin:8px 0 0">${esc(w)}</div>`).join("");
+}
+
+function openConnectDialog(ex, mode, onDone) {
+  const g = KEY_GUIDES[ex][mode];
+  const isLocal = ["localhost", "127.0.0.1", "[::1]"].includes(location.hostname) || location.protocol === "https:";
+  const dlg = openDialog(`
+    <form id="acct-form" novalidate>
+      <div class="dlg-head"><h2>Connect ${esc(accountName(ex, mode))}</h2></div>
+      <div class="dlg-body">
+        ${mode === "live" ? `<div class="alert error"><b>Real money.</b> Bots on this account trade with your real balance. Try testnet or paper first.</div>` : ""}
+        <p class="small">Binance, Bybit and Alpaca don't let personal apps log in with your password. You create a
+          <b>trading key</b> for TrendBot instead: it can place trades but can't withdraw your money, and you can delete it any time.</p>
+        <ol class="small" style="padding-left:18px">${g.steps.map(t => `<li>${esc(t)}</li>`).join("")}</ol>
+        <p class="small"><a href="${esc(g.url)}" target="_blank" rel="noopener">Open ${esc(app.meta.exchanges[ex].label.replace(" (US stocks)", ""))} ↗</a></p>
+        ${isLocal ? "" : `<div class="alert warn">Connect accounts on the computer running TrendBot. Keys shouldn't be sent across your Wi-Fi.</div>`}
+        <div class="form-grid" style="grid-template-columns:1fr">
+          <label class="field">API key <input name="api_key" autocomplete="off" spellcheck="false" required></label>
+          <label class="field">Secret <input name="api_secret" type="password" autocomplete="off" spellcheck="false" required></label>
+        </div>
+        <p class="muted small" style="margin-top:10px">TrendBot checks the key with the exchange, then saves it only on this
+          computer (<code>data/accounts.json</code>). It's never shown again and never uploaded anywhere.</p>
+      </div>
+      <div class="alert error dlg-error hidden" id="acct-err"></div>
+      <div class="dlg-foot">
+        <button class="btn" type="button" id="cancel">Cancel</button>
+        <button class="btn primary" type="submit">Check &amp; connect</button>
+      </div>
+    </form>`);
+  $("#cancel", dlg).addEventListener("click", () => dlg.close());
+  const form = $("#acct-form", dlg);
+  form.addEventListener("submit", async e => {
+    e.preventDefault();
+    const err = $("#acct-err", dlg), btn = $("button[type=submit]", form);
+    err.classList.add("hidden");
+    btn.disabled = true;
+    btn.innerHTML = `<span class="spinner"></span> Checking…`;
+    try {
+      const res = await api(`/accounts/${ex}/${mode}`, { method: "POST",
+        body: { api_key: form.api_key.value.trim(), api_secret: form.api_secret.value.trim() } });
+      dlg.close();
+      toast(`${accountName(ex, mode)} connected.`);
+      onDone(res);
+    } catch (ex2) {
+      err.textContent = ex2.message;
+      err.classList.remove("hidden");
+      btn.disabled = false;
+      btn.textContent = "Check & connect";
+    }
+  });
+}
+
 function renderSetup(view) {
   const m = app.meta;
-  const keyRows = Object.entries(m.exchanges).map(([k, e]) => {
-    const cell = (ok, name) => ok ? `<span class="key-ok">✓ set</span>` : `<span class="key-no">not set</span> <span class="small muted mono">${esc(name)}</span>`;
-    const pre = k.toUpperCase();
-    return `<tr><td><b>${esc(e.label)}</b></td>
-      <td>${cell(m.keys[k].testnet, pre + "_TESTNET_API_KEY")}</td>
-      <td>${cell(m.keys[k].live, pre + "_API_KEY")}</td></tr>`;
-  }).join("");
   const host = location.host;
+  const accountRow = (ex, mode) => {
+    const src = m.keys[ex][mode];
+    const status = src ? `<span class="key-ok">✓ Connected</span>${src === "env" ? ` <span class="muted small">(from .env)</span>` : ""}`
+      : `<span class="key-no">Not connected</span>`;
+    const btns = src
+      ? `<button class="btn sm" data-check="${ex}/${mode}">Show balance</button>${src === "app" ? ` <button class="btn sm danger" data-disconnect="${ex}/${mode}">Disconnect</button>` : ""}`
+      : `<button class="btn sm primary" data-connect="${ex}/${mode}">Connect</button>`;
+    return `<div class="acct-row" id="acct-${ex}-${mode}">
+        <div class="acct-main"><div><b>${esc(mode === "live" ? (ex === "alpaca" ? "Live account" : "Real account") : (ex === "alpaca" ? "Paper account" : "Testnet (practice)"))}</b>
+          ${mode === "live" ? `<span class="badge live">real money</span>` : ""}</div><div>${status}</div></div>
+        <div class="btn-row">${btns}</div>
+        <div class="acct-bal"></div>
+      </div>`;
+  };
   view.innerHTML = `
     <div class="page-head"><div class="grow"><h1>Setup &amp; safety</h1>
-      <div class="muted small">Everything runs on your own computer. Your API keys stay in the <code>.env</code> file there and are never shown in this app.</div></div></div>
+      <div class="muted small">Everything runs on your own computer. Connected keys are stored only there and are never shown in this app.</div></div></div>
 
     <div class="card">
-      <h2>API keys found</h2>
-      <p class="muted small">Paper mode for crypto needs no keys. Testnet and live need keys from the exchange. Only "set / not set" is ever shown here.</p>
-      <div class="table-wrap"><table>
-        <thead><tr><th>Exchange</th><th>Testnet / practice</th><th>Live (real money)</th></tr></thead>
-        <tbody>${keyRows}</tbody></table></div>
+      <h2>Your exchange accounts</h2>
+      <p class="muted small">Paper trading on Binance or Bybit needs no account at all. Connect an account to trade on the exchange's practice site
+        (testnet) or with real money. Stocks need a free Alpaca paper account even for paper trading, because prices come from Alpaca.</p>
+      <div class="acct-grid">
+        ${Object.entries(m.exchanges).map(([ex, e]) => `
+          <div class="acct-card"><h3>${esc(e.label)}</h3>${accountRow(ex, "testnet")}${accountRow(ex, "live")}</div>`).join("")}
+      </div>
     </div>
 
     <div class="card prose">
@@ -998,29 +1105,12 @@ function renderSetup(view) {
       <ol class="steps">
         <li><b>Backtest.</b> Open the Backtest tab and run BTC/USDT, 4h, 2 years. Look at the worst drop and the number of losing trades, not just the return.</li>
         <li><b>Paper trade for a few weeks.</b> Create a bot (it starts in paper mode) and press Start. Leave the app running. It uses real live prices but pretend money.</li>
-        <li><b>Optional: testnet.</b> Make practice keys (links below), add them to <code>.env</code>, restart TrendBot, and switch the bot to Testnet to check that real orders work.</li>
-        <li><b>Live, small.</b> Only if you're comfortable: add live keys and switch the bot to Live (you'll type LIVE to confirm). Keep the trade size small - the default is 20 USDT per trade with a 10 USDT daily loss cap.</li>
+        <li><b>Optional: testnet.</b> Connect a testnet account above and switch the bot to Testnet to check that real orders work.</li>
+        <li><b>Live, small.</b> Only if you're comfortable: connect your real account and switch the bot to Live (you'll type LIVE to confirm). Keep the trade size small - the default is 20 USDT per trade with a 10 USDT daily loss cap.</li>
       </ol>
-    </div>
-
-    <div class="card prose">
-      <h2>Adding API keys (.env file)</h2>
-      <ol>
-        <li>In your TrendBot folder, copy <code>.env.example</code> and name the copy <code>.env</code>.</li>
-        <li>Open <code>.env</code> in Notepad and paste your keys after the <code>=</code> signs, for example:
-          <pre><code>BINANCE_TESTNET_API_KEY=your-test-key
-BINANCE_TESTNET_API_SECRET=your-test-secret</code></pre></li>
-        <li>Save, close the TrendBot window and double-click <code>start.bat</code> again. This page should now show "✓ set".</li>
-      </ol>
-      <h3>Where to get keys</h3>
-      <ul>
-        <li><b>Binance testnet:</b> <a href="https://testnet.binance.vision/" target="_blank" rel="noopener">testnet.binance.vision</a> (log in with GitHub, "Generate HMAC_SHA256 Key").</li>
-        <li><b>Bybit testnet:</b> <a href="https://testnet.bybit.com/" target="_blank" rel="noopener">testnet.bybit.com</a> → API management.</li>
-        <li><b>Alpaca (stocks):</b> free paper account at <a href="https://alpaca.markets/" target="_blank" rel="noopener">alpaca.markets</a> → paper trading → API keys. Put these in <code>ALPACA_TESTNET_API_KEY</code> / <code>ALPACA_TESTNET_API_SECRET</code>.</li>
-        <li><b>Live keys:</b> in your Binance or Bybit account under API Management.</li>
-      </ul>
-      <div class="alert warn"><b>Live key permissions:</b> enable <b>spot trading only</b>. Never enable withdrawals or
-        futures/margin. If the exchange offers IP restriction, restrict the key to your home IP.</div>
+      <div class="alert warn"><b>Key safety:</b> TrendBot refuses Binance and Bybit keys that allow withdrawals. A trading-only key can't move money out of
+        your account. You can delete it on the exchange at any time to cut TrendBot off instantly.</div>
+      <p class="muted small">Advanced: keys can also go in the <code>.env</code> file (see <code>.env.example</code>). Those take priority over connected accounts.</p>
     </div>
 
     <div class="card prose">
@@ -1049,6 +1139,35 @@ BINANCE_TESTNET_API_SECRET=your-test-secret</code></pre></li>
         <li>Crypto trading may be taxable where you live. Keep records - the trades table lists every fill.</li>
       </ul>
     </div>`;
+
+  $(".acct-grid", view).addEventListener("click", async e => {
+    const b = e.target.closest("button[data-connect], button[data-disconnect], button[data-check]");
+    if (!b) return;
+    const [ex, mode] = (b.dataset.connect || b.dataset.disconnect || b.dataset.check).split("/");
+    const bal = $(`#acct-${ex}-${mode} .acct-bal`);
+    if (b.dataset.connect) {
+      return openConnectDialog(ex, mode, async res => {
+        app.meta = await api("/meta");
+        renderSetup(view);
+        $(`#acct-${ex}-${mode} .acct-bal`).innerHTML = balancesHtml(res);
+      });
+    }
+    if (b.dataset.disconnect) {
+      if (!(await confirmDialog("Disconnect account?", `TrendBot will forget the ${accountName(ex, mode)} key. To fully revoke it, also delete the key on the exchange.`, "Disconnect", true))) return;
+      try {
+        await api(`/accounts/${ex}/${mode}`, { method: "DELETE" });
+        app.meta = await api("/meta");
+        toast("Disconnected.");
+        renderSetup(view);
+      } catch (err) { toast(err.message, true); }
+      return;
+    }
+    b.disabled = true;
+    bal.innerHTML = `<span class="small muted"><span class="spinner"></span> Checking…</span>`;
+    try { bal.innerHTML = balancesHtml(await api(`/accounts/${ex}/${mode}`)); }
+    catch (err) { bal.innerHTML = `<div class="alert error" style="margin:8px 0 0">${esc(err.message)}</div>`; }
+    b.disabled = false;
+  });
 }
 
 // ============================================================================ theme / boot

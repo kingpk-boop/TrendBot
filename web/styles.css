@@ -287,6 +287,14 @@ tr:last-child td { border-bottom: none; }
 .key-ok { color: var(--pos); font-weight: 700; }
 .key-no { color: var(--ink-3); }
 
+.acct-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(290px, 1fr)); gap: 12px; }
+.acct-card { border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; }
+.acct-card h3 { margin-bottom: 4px; }
+.acct-row { padding: 10px 0; border-top: 1px solid var(--grid); }
+.acct-row:first-of-type { border-top: none; }
+.acct-main { display: flex; justify-content: space-between; gap: 8px; flex-wrap: wrap; margin-bottom: 6px; font-size: .9rem; }
+.acct-bal:not(:empty) { margin-top: 8px; }
+
 /* ------------------------------------------------------------------ dialogs / toast */
 
 dialog {

@@ -48,35 +48,35 @@ and the computer is awake. To run 24/7, set Windows to never sleep when plugged 
    press *Run backtest*. Look at the *worst drop* and the losing trades, not only the return.
 2. **Paper trade:** press *Create bot from these settings*, then **Start**. Let it run for a few
    weeks. Signals are rare: on 4-hour candles there may be only a couple of trades a month.
-3. **Optional testnet:** make practice keys (see below), switch the bot to *Testnet* and check that
+3. **Optional testnet:** connect a testnet account in **Setup**, switch the bot to *Testnet* and check that
    real orders go through.
-4. **Live, small:** only if you're comfortable. Add live keys, stop the bot, *Edit* → mode *Live*,
+4. **Live, small:** only if you're comfortable. Connect your real account in Setup, stop the bot, *Edit* → mode *Live*,
    type `LIVE` to confirm, then Start. Keep the trade size small.
 
-## API keys (only for testnet and live)
+## Connecting your exchange accounts (only for testnet and live)
 
-TrendBot reads keys from a file called `.env` in the TrendBot folder. The app never shows them, and
-`.env` is excluded from git, so it never gets uploaded.
+Binance, Bybit and Alpaca don't let personal apps log in with your exchange password. Instead you make
+a **trading key** for TrendBot: it can place trades but can't withdraw money, and you can delete it on
+the exchange at any time to cut TrendBot off.
 
-1. Copy `.env.example` and rename the copy to `.env`.
-2. Open `.env` in Notepad and paste each key after its `=` sign, for example:
-   ```
-   BINANCE_TESTNET_API_KEY=abc123...
-   BINANCE_TESTNET_API_SECRET=def456...
-   ```
-3. Save the file, close the TrendBot window and double-click `start.bat` again.
-   The **Setup** tab shows "✓ set" for keys it found.
+1. Open the **Setup** tab and press **Connect** next to the account (for example *Binance → Testnet*).
+2. Follow the steps in the window to create the key on the exchange, and paste the key and secret.
+3. Press **Check & connect**. TrendBot logs in to check the key and shows your balance.
+   It **refuses Binance and Bybit keys that allow withdrawals**.
 
-Where to get keys:
+Connected keys are saved only on your computer (`data/accounts.json`, never uploaded) and are never
+shown again. **Disconnect** makes TrendBot forget a key; also delete it on the exchange to revoke it.
+For safety, accounts can only be connected on the computer running TrendBot (or over https), not
+from your phone over home Wi-Fi.
 
-| Exchange | Practice (testnet) keys | Real-money keys |
+| Exchange | Practice keys | Real-money keys |
 |---|---|---|
-| Binance | [testnet.binance.vision](https://testnet.binance.vision/) → log in with GitHub → *Generate HMAC_SHA256 Key* | Binance → Account → API Management |
-| Bybit | [testnet.bybit.com](https://testnet.bybit.com/) → API | Bybit → Account → API |
+| Binance | [testnet.binance.vision](https://testnet.binance.vision/) → log in with GitHub → *Generate HMAC_SHA256 Key* | Binance → Account → API Management. Tick *Enable Spot & Margin Trading* only. |
+| Bybit | [testnet.bybit.com](https://testnet.bybit.com/) → API | Bybit → Account → API. *Read-Write*, Spot trade only, no Withdraw. |
 | Alpaca | Free paper account at [alpaca.markets](https://alpaca.markets/) → API keys (also needed for stock *paper* mode) | Alpaca live account → API keys |
 
-**Real-money keys must allow spot trading only.** Never tick *withdrawals*, *futures* or *margin*.
-If the exchange lets you restrict the key to your IP address, do it.
+Advanced: you can still put keys in a `.env` file instead (copy `.env.example`). Keys in `.env` take
+priority over connected accounts.
 
 ## Use it from your phone
 
@@ -104,8 +104,8 @@ put TrendBot on a cloud server. The repository is ready for [Render](https://ren
    and sets everything up: a server in **Frankfurt** (Binance and Bybit block US servers), a small
    disk that keeps your bots and trade history, and the settings below.
 3. It asks for **BOT_UI_PASSWORD**. Pick a long, random password (16+ characters) that you don't use
-   anywhere else, because this page is on the public internet. Leave the key fields empty to start
-   with paper trading. You can add keys later under the service's *Environment* tab.
+   anywhere else, because this page is on the public internet. Leave the key fields empty: start
+   with paper trading, and connect accounts later on the app's **Setup** page.
 4. After it deploys, Render shows your link, e.g. `https://trendbot-xxxx.onrender.com`. Open it,
    log in, and add it to your phone's home screen.
 
@@ -135,7 +135,7 @@ Don't run the same bot on your PC and in the cloud at the same time. They'd trad
 | Package install fails | Check the internet connection. Delete the `.venv` folder and run `start.bat` again. |
 | "Something is already using port 8765" | TrendBot is already open in another window. Use that one, or close it first. |
 | Backtest or bot says it can't reach Binance/Bybit | Check your internet. Some countries/networks block an exchange; try the other one. |
-| "needs API keys" | Add the keys named in the message to `.env` and restart. |
+| "isn't connected yet" | Connect that account on the **Setup** page. |
 | Changed `.env` but nothing happened | Close the TrendBot window and start it again; `.env` is read at startup. |
 
 ## For the curious: what's inside
