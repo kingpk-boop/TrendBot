@@ -1,0 +1,8 @@
+# Secrets and personal trading data - never commit
+.env
+data/
+
+# Python
+.venv/
+__pycache__/
+*.pyc
