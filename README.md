@@ -94,6 +94,13 @@ Don't open TrendBot to the internet (no port forwarding on your router).
 
 On the PC you can also install it like an app: in Chrome or Edge, *⋮ → Install TrendBot*.
 
+## The online version (Vercel)
+
+TrendBot also has a free public website on Vercel for **backtesting from any device**. It's
+deployed automatically from this repository (`index.py` and `vercel.json`). It is backtest-only on
+purpose: Vercel shuts websites down between visits, so it can't watch prices around the clock, and a
+public website is no place for exchange keys. **Bots and connected accounts live in the PC app.**
+
 ## Run it in the cloud 24/7 (optional)
 
 Running on your PC is free, but the bots stop when the PC sleeps. To keep them running all the time,

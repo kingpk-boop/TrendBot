@@ -400,7 +400,8 @@ async function route() {
   }
   if (!app.meta.logged_in) return renderLogin(view);
 
-  const parts = (location.hash.replace(/^#\/?/, "") || "bots").split("/");
+  const parts = (location.hash.replace(/^#\/?/, "") || (app.meta.backtest_only ? "backtest" : "bots")).split("/");
+  if (app.meta.backtest_only && parts[0] === "bots") return renderOnlineBots(view);
   $$("#tabs a").forEach(a => a.classList.toggle("active", a.dataset.tab === parts[0]));
   window.scrollTo(0, 0);
   if (parts[0] === "bots" && parts[1]) return renderBot(view, decodeURIComponent(parts[1]));
@@ -442,6 +443,25 @@ function renderLogin(view) {
 }
 
 // ============================================================================ bots list
+
+/** The public (Vercel) site only backtests; explain where the bots are. */
+function renderOnlineBots(view) {
+  $$("#tabs a").forEach(a => a.classList.toggle("active", a.dataset.tab === "bots"));
+  view.innerHTML = `
+    <div class="page-head"><div class="grow"><h1>Your bots</h1></div></div>
+    <div class="card empty">
+      <h2>Bots run in TrendBot on your PC</h2>
+      <p>This online version is for <b>backtesting</b> only. Websites like this one shut down between visits,
+         so they can't watch prices around the clock or keep your exchange keys safe.</p>
+      <p>To run bots: on your PC, double-click <code>start.bat</code> in the TrendBot folder and use
+         <b>http://localhost:8765</b>. Your bots, trades and connected accounts live there.</p>
+      <div class="btn-row" style="justify-content:center">
+        <a class="btn primary" href="#/backtest">Run a backtest</a>
+        <a class="btn" href="#/setup">How it works</a>
+      </div>
+    </div>`;
+}
+
 
 async function renderBots(view) {
   view.innerHTML = `
@@ -849,6 +869,8 @@ function openBotForm(bot = null, preset = null) {
 function renderBacktest(view) {
   const v = app.backtestForm || { ...app.meta.defaults, days: 730 };
   view.innerHTML = `
+    ${app.meta.backtest_only ? `<div class="alert info">You're on the <b>online version</b> of TrendBot: backtests only.
+      To run bots and connect exchange accounts, use TrendBot on your PC (<code>start.bat</code> → http://localhost:8765).</div>` : ""}
     <div class="page-head"><div class="grow"><h1>Backtest</h1>
       <div class="muted small">Replays the exact bot rules on past prices, with fees, and compares the result with simply buying and holding.</div></div></div>
     <div class="card">
@@ -905,7 +927,7 @@ function showBacktest(r) {
     <div class="page-head" style="margin-top:4px">
       <div class="grow"><h2>${esc(req.symbol)} · ${esc(app.meta.exchanges[req.exchange]?.label)} · ${esc(req.timeframe)} · ${esc(fmtDate(r.start))} – ${esc(fmtDate(r.end))}</h2>
         <div class="muted small">${verdict} Fees of ${fmtNum(r.fee_rate * 100, 2)}% per side included.</div></div>
-      <div class="btn-row"><button class="btn primary" id="bt-create">Create bot from these settings</button></div>
+      ${app.meta.backtest_only ? "" : `<div class="btn-row"><button class="btn primary" id="bt-create">Create bot from these settings</button></div>`}
     </div>
     <div class="tiles">
       ${tile("Strategy return", `<span class="${cls(r.strategy_return_pct)}">${pct(r.strategy_return_pct)}</span>`, "reinvesting each trade")}
@@ -963,7 +985,7 @@ function showBacktest(r) {
       { name: `EMA ${req.slow}`, values: r.curve.map(p => p.slow), color: "--c-slow", width: 1.75 },
     ],
   });
-  $("#bt-create").addEventListener("click", () => {
+  $("#bt-create")?.addEventListener("click", () => {
     const { days, ...settings } = req;
     openBotForm(null, { ...settings, mode: "paper", name: `${req.symbol} ${req.timeframe}` });
   });
@@ -1090,7 +1112,11 @@ function renderSetup(view) {
     <div class="page-head"><div class="grow"><h1>Setup &amp; safety</h1>
       <div class="muted small">Everything runs on your own computer. Connected keys are stored only there and are never shown in this app.</div></div></div>
 
-    <div class="card">
+    ${m.backtest_only ? `<div class="card">
+      <h2>Your exchange accounts</h2>
+      <div class="alert info" style="margin:0">For your safety, accounts can only be connected in TrendBot on your PC, never on this
+        public website. Open <code>start.bat</code> on your PC, go to <b>http://localhost:8765</b> → Setup, and connect there.</div>
+    </div>` : `<div class="card">
       <h2>Your exchange accounts</h2>
       <p class="muted small">Paper trading on Binance or Bybit needs no account at all. Connect an account to trade on the exchange's practice site
         (testnet) or with real money. Stocks need a free Alpaca paper account even for paper trading, because prices come from Alpaca.</p>
@@ -1098,7 +1124,7 @@ function renderSetup(view) {
         ${Object.entries(m.exchanges).map(([ex, e]) => `
           <div class="acct-card"><h3>${esc(e.label)}</h3>${accountRow(ex, "testnet")}${accountRow(ex, "live")}</div>`).join("")}
       </div>
-    </div>
+    </div>`}
 
     <div class="card prose">
       <h2>Recommended path</h2>
@@ -1140,7 +1166,7 @@ function renderSetup(view) {
       </ul>
     </div>`;
 
-  $(".acct-grid", view).addEventListener("click", async e => {
+  $(".acct-grid", view)?.addEventListener("click", async e => {
     const b = e.target.closest("button[data-connect], button[data-disconnect], button[data-check]");
     if (!b) return;
     const [ex, mode] = (b.dataset.connect || b.dataset.disconnect || b.dataset.check).split("/");
