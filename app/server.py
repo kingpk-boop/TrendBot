@@ -14,7 +14,7 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, model_validator
 
-from .config import (DATA_DIR, EXCHANGES, MODES, POLL_SECONDS, TIMEFRAMES, WEB_DIR, api_keys, key_source,
+from .config import (BACKTEST_ONLY, DATA_DIR, EXCHANGES, MODES, POLL_SECONDS, TIMEFRAMES, WEB_DIR, api_keys, key_source,
                      keys_status, load_dotenv, remove_account, save_account)
 from .engine import BotManager, BotNotFound
 from .exchanges import ALPACA_BARS_PER_DAY, MarketError, make_market, verify_account
@@ -39,7 +39,8 @@ AUTH_TOKEN = hmac.new(_secret(), PASSWORD.encode(), hashlib.sha256).hexdigest() 
 
 @asynccontextmanager
 async def lifespan(_app):
-    manager.resume()
+    if not BACKTEST_ONLY:
+        manager.resume()
     yield
     manager.shutdown()
 
@@ -51,8 +52,12 @@ app = FastAPI(title="TrendBot", lifespan=lifespan, docs_url=None, redoc_url=None
 async def guard(request: Request, call_next):
     path = request.url.path
     if path.startswith("/api/"):
+        if BACKTEST_ONLY and path.startswith(("/api/bots", "/api/accounts")):
+            return JSONResponse({"detail": "This online version only runs backtests. Bots and exchange accounts "
+                                           "live in TrendBot on your PC."}, 403)
         host = (request.headers.get("host") or "").rsplit(":", 1)[0].lower()
-        if not PASSWORD and host not in LOCAL_HOSTS:
+        # The backtest-only site holds nothing private, so it may be public without a password.
+        if not PASSWORD and not BACKTEST_ONLY and host not in LOCAL_HOSTS:
             return JSONResponse({"detail": "Set BOT_UI_PASSWORD to use the app from another device."}, 403)
         if request.method != "GET" and request.headers.get("x-trendbot") != "1":
             return JSONResponse({"detail": "Missing app header."}, 403)  # blocks cross-site form posts
@@ -156,7 +161,7 @@ def meta(request: Request):
     return {
         "exchanges": EXCHANGES, "timeframes": list(TIMEFRAMES), "modes": list(MODES),
         "keys": keys_status(), "poll_seconds": POLL_SECONDS,
-        "auth_required": bool(PASSWORD),
+        "auth_required": bool(PASSWORD), "backtest_only": BACKTEST_ONLY,
         "logged_in": not PASSWORD or hmac.compare_digest(request.cookies.get("tb_auth", ""), AUTH_TOKEN),
         "defaults": BotConfigIn().to_config(),
     }

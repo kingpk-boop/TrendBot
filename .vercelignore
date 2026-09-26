@@ -1,0 +1,7 @@
+.env
+data
+.venv
+tools
+*.bat
+Dockerfile
+render.yaml

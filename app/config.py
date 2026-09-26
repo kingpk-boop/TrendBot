@@ -9,8 +9,14 @@ import threading
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
+
+# Vercel (and TRENDBOT_BACKTEST_ONLY=1) run a public, backtest-only site: serverless hosts can't keep
+# bots running or store their state, so bots and exchange accounts live in the PC app only.
+BACKTEST_ONLY = bool(os.environ.get("VERCEL") or os.environ.get("TRENDBOT_BACKTEST_ONLY"))
+
 # Cloud hosts point this at a persistent disk; locally it is the data/ folder.
-DATA_DIR = Path(os.environ.get("TRENDBOT_DATA_DIR") or ROOT / "data")
+# Vercel's filesystem is read-only except /tmp.
+DATA_DIR = Path(os.environ.get("TRENDBOT_DATA_DIR") or ("/tmp/trendbot" if os.environ.get("VERCEL") else ROOT / "data"))
 BOTS_DIR = DATA_DIR / "bots"
 WEB_DIR = ROOT / "web"
 
