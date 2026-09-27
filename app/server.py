@@ -265,7 +265,7 @@ def meta(request: Request):
         "exchanges": EXCHANGES, "timeframes": list(TIMEFRAMES), "modes": list(MODES),
         "keys": keys_status(), "poll_seconds": POLL_SECONDS,
         "auth_required": bool(valid_tokens()), "backtest_only": BACKTEST_ONLY, "cloud": CLOUD,
-        "google_client_id": GOOGLE_CLIENT_ID if GOOGLE_LOGIN and not BACKTEST_ONLY else None,
+        "google_client_id": GOOGLE_CLIENT_ID if GOOGLE_LOGIN else None,
         "password_login": bool(_password_token()),
         "needs_setup": needs_setup(),
         "ai": {"source": None, "model": ai.MODEL} if BACKTEST_ONLY else ai.ai_status(),
