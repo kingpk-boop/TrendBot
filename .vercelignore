@@ -5,3 +5,4 @@ tools
 *.bat
 Dockerfile
 render.yaml
+frontend/node_modules
