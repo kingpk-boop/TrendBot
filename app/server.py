@@ -270,6 +270,7 @@ def meta(request: Request):
         "needs_setup": needs_setup(),
         "ai": {"source": None, "model": ai.MODEL} if BACKTEST_ONLY else ai.ai_status(),
         "scan_symbols": SCAN_SYMBOLS,
+        "storage_setup_url": os.environ.get("TRENDBOT_STORAGE_URL") or None,
         "logged_in": _logged_in(request) and not needs_setup(),
         "defaults": BotConfigIn().to_config(),
     }

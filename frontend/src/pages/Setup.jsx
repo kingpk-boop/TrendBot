@@ -3,7 +3,7 @@ import { useState } from "react";
 import { api } from "../api.js";
 import { accountName, ago, fmtQty } from "../format.js";
 import { ConnectDialog } from "../forms.jsx";
-import { Modal, useApp, usePolling } from "../ui.jsx";
+import { FinishSetup, Modal, useApp, usePolling } from "../ui.jsx";
 
 const TUTORIAL = "https://github.com/kingpk-boop/TrendBot/blob/main/TUTORIAL.md";
 
@@ -25,15 +25,7 @@ function ConnectOnPC({ ex, mode, close }) {
   return (
     <Modal onClose={() => close()}>
       <div className="dlg-head"><h2>Connect {accountName(meta, ex, mode)}</h2></div>
-      <div className="dlg-body">
-        <p>Your bots run in TrendBot on your PC, so that's where you connect exchange accounts. It keeps your keys off the internet.</p>
-        <ol className="small" style={{ paddingLeft: 18 }}>
-          <li>On your PC, open the <b>Documents\TrendBot</b> folder and double-click <b>start.bat</b>.</li>
-          <li>Your browser opens <b>http://localhost:8765</b>. Go to <b>Setup</b>.</li>
-          <li>Press <b>Connect</b> next to {accountName(meta, ex, mode)} and follow the steps there.</li>
-        </ol>
-        <p className="muted small">Don't have TrendBot on your PC yet? See the <a href={TUTORIAL} target="_blank" rel="noopener">tutorial ↗</a>.</p>
-      </div>
+      <div className="dlg-body"><FinishSetup compact /></div>
       <div className="dlg-foot"><button className="btn primary" onClick={() => close()}>Got it</button></div>
     </Modal>
   );
@@ -123,7 +115,7 @@ function AICard() {
         <b> AI check before each buy</b> that can skip trades that look like false starts. The AI can only skip buys. Trade size, the daily
         loss cap and the trailing stop stay in charge, and if the AI is unreachable the bot simply follows its normal rules.</p>
       {meta.backtest_only ? (
-        <div className="alert info" style={{ margin: 0 }}>AI features are available in TrendBot on your PC (so your key stays private).</div>
+        <div className="alert info" style={{ margin: 0 }}>AI switches on once the website setup above is finished.</div>
       ) : src ? (
         <div className="acct-main" style={{ alignItems: "center" }}>
           <div><span className="key-ok">✓ Connected</span>{src === "env" && <span className="muted small"> (from .env)</span>}
@@ -194,16 +186,16 @@ export function SetupPage() {
   return (
     <>
       <div className="page-head"><div className="grow"><h1>Setup &amp; safety</h1>
-        <div className="muted small">{meta.cloud
+        <div className="muted small">{meta.cloud || meta.backtest_only
           ? "Everything runs on this website. Connected keys are stored encrypted and are never shown again."
           : "Everything runs on your own computer. Connected keys are stored only there and are never shown in this app."}</div></div></div>
 
       {meta.cloud && <TimerCard />}
+      {meta.backtest_only && <FinishSetup />}
 
       <div className="card">
         <h2>Your exchange accounts</h2>
-        {meta.backtest_only && <div className="alert info">You're on the online website. For your safety, Binance, Bybit and Alpaca
-          accounts are connected in <b>TrendBot on your PC</b> (where your bots run), never on this public site. Press Connect below to see how.</div>}
+        {meta.backtest_only && <div className="alert warn">Account linking switches on once the website's free database is connected. See <b>Finish setting up the website</b> above.</div>}
         <>
           <p className="muted small">Paper trading on Binance or Bybit needs no account at all. Connect an account to trade on the exchange's practice site
             (testnet) or with real money. Stocks need a free Alpaca paper account even for paper trading, because prices come from Alpaca.</p>

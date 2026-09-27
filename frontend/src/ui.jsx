@@ -230,3 +230,22 @@ export function AIReview({ kind, data, botId, label = "Ask AI to review this" })
     </div>
   );
 }
+
+/** Website without a database yet: the one step that turns on bots and account linking. */
+export function FinishSetup({ compact = false }) {
+  const { meta } = useApp();
+  const url = meta.storage_setup_url || "https://vercel.com/dashboard";
+  return (
+    <div className={compact ? "" : "card"} id="finish-setup">
+      {!compact && <h2>Finish setting up the website</h2>}
+      <p className="small" style={{ marginTop: compact ? 0 : undefined }}>Bots, account linking and AI switch on as soon as the website has its
+        free database to store them in. It's one step in your Vercel account (about a minute):</p>
+      <ol className="small" style={{ paddingLeft: 18 }}>
+        <li>Click <b>Open storage settings</b> below (log in to Vercel if asked).</li>
+        <li>Click <b>Create Database</b> → <b>Upstash for Redis</b> → choose the <b>Free</b> plan → accept → <b>Connect</b> it to <b>trendbot</b>.</li>
+        <li>When Vercel offers to <b>Redeploy</b>, click it. After about a minute, reload this page.</li>
+      </ol>
+      <a className="btn primary" href={url} target="_blank" rel="noopener">Open storage settings ↗</a>
+    </div>
+  );
+}
