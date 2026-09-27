@@ -22,6 +22,10 @@ A trading bot that runs on your own computer and follows price trends on **Binan
   - **Testnet**: real orders on the exchange's practice site, with fake balances.
   - **Live**: real money. You have to type `LIVE` to switch a bot to it.
 - Picks up where it left off if the computer restarts: running bots start again automatically.
+- **Markets scanner:** ranks a dozen coins (or stocks) by how well the strategy did on each.
+- **Optional Claude AI:** plain-language reviews of backtests, scans and bots, plus an optional
+  *AI check before each buy* that can skip trades that look like false starts. The AI can only skip
+  buys; the safety limits above stay in charge. Needs your own Anthropic API key (a few cents per use).
 
 ## Start it (Windows)
 
@@ -167,6 +171,7 @@ start.bat          Windows launcher (creates .venv, installs packages, runs run.
 run.py             Starts the web server (options: --host, --port, --no-browser)
 app/strategy.py    The trading rules and the backtester (same rules for both)
 app/engine.py      Runs each bot once a minute and saves its state in data/bots/
+app/ai.py          Optional Claude AI: pre-trade check and plain-language reviews
 app/exchanges.py   Binance/Bybit (via ccxt), Alpaca, and the paper-trading simulator
 app/server.py      The web API the page talks to
 frontend/          The web app's source (React + Vite; installable as an app)

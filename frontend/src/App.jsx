@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { api, setUnauthorizedHandler } from "./api.js";
 import { BacktestPage } from "./pages/Backtest.jsx";
 import { BotPage, BotsPage, OnlineBots } from "./pages/Bots.jsx";
+import { MarketsPage } from "./pages/Markets.jsx";
 import { SetupPage } from "./pages/Setup.jsx";
 import { AppContext, Spinner, useHash, useModalHost, useToasts } from "./ui.jsx";
 
@@ -73,6 +74,7 @@ export default function App() {
     : <Spinner>Loading…</Spinner>;
   else if (!meta.logged_in) page = <Login onDone={reloadMeta} />;
   else if (tab === "backtest") page = <BacktestPage />;
+  else if (tab === "markets") page = <MarketsPage />;
   else if (tab === "setup") page = <SetupPage />;
   else if (meta.backtest_only) page = <OnlineBots />;
   else if (parts[1]) page = <BotPage key={parts[1]} id={decodeURIComponent(parts[1])} />;
@@ -85,7 +87,7 @@ export default function App() {
         <div className="topbar-inner">
           <a className="brand" href="#/bots"><img src="icons/icon.svg" alt="" />TrendBot</a>
           <nav className="tabs" id="tabs">
-            {[["bots", "Bots"], ["backtest", "Backtest"], ["setup", "Setup"]].map(([k, label]) => (
+            {[["bots", "Bots"], ["markets", "Markets"], ["backtest", "Backtest"], ["setup", "Setup"]].map(([k, label]) => (
               <a key={k} href={`#/${k}`} data-tab={k} className={showTabs && tab === k ? "active" : ""}>{label}</a>
             ))}
           </nav>

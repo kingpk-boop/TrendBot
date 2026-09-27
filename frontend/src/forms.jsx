@@ -125,6 +125,13 @@ export function BotForm({ bot, preset, close }) {
               </select></label>
           </div>
           <div id="mode-note" style={{ marginTop: 12 }}><ModeNote v={v} /></div>
+          <label className="check">
+            <input type="checkbox" name="ai_filter" checked={!!v.ai_filter} disabled={!meta.ai?.source && !v.ai_filter}
+              onChange={e => set("ai_filter")({ target: { value: e.target.checked } })} />
+            <span><b>AI check before each buy</b> - Claude looks at the market when a buy signal appears and can skip trades that look like
+              false starts. It can't make trades bigger or remove the stop.{" "}
+              {meta.ai?.source ? "About 1-3 US cents per signal on your Anthropic account." : <>Needs AI connected in <a href="#/setup">Setup</a>.</>}</span>
+          </label>
           <AdvancedFields v={v} set={set} />
         </div>
         {error && <div className="alert error dlg-error" id="form-err">{error}</div>}

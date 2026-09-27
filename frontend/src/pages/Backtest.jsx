@@ -4,11 +4,18 @@ import { api } from "../api.js";
 import { candleIndex } from "../chart.js";
 import { cls, exchangeLabel, fmtDate, fmtNum, fmtPrice, fmtTime, pct, quoteOf, signed } from "../format.js";
 import { AdvancedFields, StrategyFields, toBody, useFields } from "../forms.jsx";
-import { ChartView, Legend, Spinner, Tile, useApp } from "../ui.jsx";
+import { AIReview, ChartView, Legend, Spinner, Tile, useApp } from "../ui.jsx";
 import { useOpenBotForm } from "./Bots.jsx";
 
 // Kept outside the component so the form and last result survive switching tabs.
 const memory = { form: null, result: null };
+/** Open the Backtest tab with these settings filled in (used by the Markets page). */
+export function openBacktest(settings) {
+  memory.form = { ...memory.form, ...settings };
+  memory.result = null;
+  location.hash = "#/backtest";
+}
+
 const PERIODS = [[90, "3 months"], [180, "6 months"], [365, "1 year"], [730, "2 years"], [1095, "3 years"], [1825, "5 years"]];
 
 function Results({ r }) {
@@ -91,6 +98,7 @@ function Results({ r }) {
             ))}</tbody></table></div>
         ) : <p className="muted small">No trades.</p>}
       </div>
+      <AIReview kind="backtest" data={r} />
       <div className="alert info">A backtest is a rough guide, not a promise. Real fills can be worse (slippage), and a
         strategy that worked on past prices can lose money in future markets.</div>
     </div>
@@ -99,7 +107,7 @@ function Results({ r }) {
 
 export function BacktestPage() {
   const { meta } = useApp();
-  const [v, set] = useFields(memory.form || { ...meta.defaults, days: 730 });
+  const [v, set] = useFields({ ...meta.defaults, days: 730, ...memory.form });
   const [result, setResult] = useState(memory.result);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -110,7 +118,7 @@ export function BacktestPage() {
     setBusy(true);
     setError("");
     try {
-      const { name, mode, ...rest } = toBody(v);
+      const { name, mode, ai_filter, symbols, ...rest } = toBody(v);
       const r = await api("/backtest", { method: "POST", body: rest });
       memory.result = r;
       setResult(r);

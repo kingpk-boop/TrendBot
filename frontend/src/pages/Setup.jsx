@@ -69,6 +69,67 @@ function AccountRow({ ex, mode }) {
   );
 }
 
+function AICard() {
+  const { meta, modal, toast, reloadMeta } = useApp();
+  const [key, setKey] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const src = meta.ai?.source;
+
+  const connect = async e => {
+    e.preventDefault();
+    setBusy(true);
+    setError("");
+    try {
+      await api("/ai/key", { method: "POST", body: { api_key: key.trim() } });
+      setKey("");
+      toast("AI connected.");
+      await reloadMeta();
+    } catch (err) { setError(err.message); }
+    setBusy(false);
+  };
+  const disconnect = async () => {
+    if (!(await modal.confirm({ title: "Disconnect AI?", okLabel: "Disconnect", danger: true,
+      text: "TrendBot will forget the Anthropic key. Bots with AI check on will trade with the normal strategy." }))) return;
+    try { await api("/ai/key", { method: "DELETE" }); toast("AI disconnected."); await reloadMeta(); }
+    catch (err) { toast(err.message, true); }
+  };
+
+  return (
+    <div className="card" id="ai-card">
+      <h2><span className="ai-mark">AI</span> Claude AI (optional)</h2>
+      <p className="small">Connect Claude, Anthropic's AI, to get plain-language reviews of backtests, market scans and bots, and an optional
+        <b> AI check before each buy</b> that can skip trades that look like false starts. The AI can only skip buys. Trade size, the daily
+        loss cap and the trailing stop stay in charge, and if the AI is unreachable the bot simply follows its normal rules.</p>
+      {meta.backtest_only ? (
+        <div className="alert info" style={{ margin: 0 }}>AI features are available in TrendBot on your PC (so your key stays private).</div>
+      ) : src ? (
+        <div className="acct-main" style={{ alignItems: "center" }}>
+          <div><span className="key-ok">✓ Connected</span>{src === "env" && <span className="muted small"> (from .env)</span>}
+            <span className="muted small"> · model {meta.ai.model}</span></div>
+          {src === "app" && <button className="btn sm danger" id="ai-disconnect" onClick={disconnect}>Disconnect</button>}
+        </div>
+      ) : (
+        <form onSubmit={connect} noValidate>
+          <ol className="small" style={{ paddingLeft: 18 }}>
+            <li>Create an account at <a href="https://console.anthropic.com/" target="_blank" rel="noopener">console.anthropic.com ↗</a> and add a little credit (for example $5).</li>
+            <li>Go to <b>API Keys → Create Key</b> and copy it.</li>
+            <li>Paste it below. TrendBot checks it and stores it only on this computer.</li>
+          </ol>
+          <div className="btn-row" style={{ alignItems: "flex-end" }}>
+            <label className="field" style={{ flex: 1, minWidth: 220 }}>Anthropic API key
+              <input name="ai_key" type="password" value={key} onChange={e => setKey(e.target.value)} autoComplete="off" spellCheck="false" placeholder="sk-ant-…" /></label>
+            <button className="btn primary" type="submit" disabled={busy || key.trim().length < 20}>
+              {busy ? <><span className="spinner" /> Checking…</> : "Connect AI"}</button>
+          </div>
+          {error && <div className="alert error" id="ai-err" style={{ margin: "12px 0 0" }}>{error}</div>}
+          <p className="muted small" style={{ marginBottom: 0 }}>Cost: roughly 1-3 US cents per review or trade check, billed by Anthropic. You can set a spending limit in the Anthropic console.</p>
+        </form>
+      )}
+    </div>
+  );
+}
+
 export function SetupPage() {
   const { meta } = useApp();
   return (
@@ -91,6 +152,8 @@ export function SetupPage() {
           </div>
         </>}
       </div>
+
+      <AICard />
 
       <div className="card prose">
         <h2>Recommended path</h2>

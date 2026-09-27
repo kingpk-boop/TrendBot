@@ -11,9 +11,10 @@ import time
 import uuid
 from datetime import datetime, timezone
 
+from . import ai
 from .config import BOTS_DIR, EXCHANGES, POLL_SECONDS, TIMEFRAMES
 from .exchanges import MarketError, NothingToSell, make_broker, make_market
-from .strategy import Params, compute, entry_signal, exit_signal, warmup_bars
+from .strategy import Params, compute, ema, entry_signal, exit_signal, warmup_bars
 
 MAX_LOG = 300
 
@@ -210,7 +211,19 @@ class Bot:
             if cap > 0 and today <= -cap:
                 self.log(f"Buy signal skipped: today's loss ({fmt(today)}) hit the daily cap of {fmt(cap)}.", "warn")
             else:
-                self._buy(ind_all["atr"][i], p)
+                reason = "EMA cross up"
+                if cfg.get("ai_filter"):
+                    review = self._ai_review(closed, ind_all, i, p)
+                    if review and review.decision == "skip":
+                        self.log(f"AI skipped this buy signal ({review.confidence}% sure): {review.reason}", "warn")
+                        with self.lock:
+                            self.state["last_candle"] = ts
+                        self.save()
+                        return
+                    if review:
+                        reason = f"EMA cross up · AI approved ({review.confidence}%)"
+                        self.log(f"AI approved the buy ({review.confidence}% sure): {review.reason}")
+                self._buy(ind_all["atr"][i], p, reason)
         with self.lock:
             self.state["last_candle"] = ts
         self.save()
@@ -224,7 +237,39 @@ class Bot:
         self.state["trades"].append(trade)
         del self.state["trades"][:-MAX_TRADES]
 
-    def _buy(self, atr_value: float, p: Params) -> None:
+    def _ai_context(self, closed: list, ind: dict, i: int, p: Params) -> dict:
+        """A compact snapshot of the market for the AI's pre-trade check."""
+        closes = [c[4] for c in closed]
+        close, atr_now = closes[i], ind["atr"][i]
+        tf_s = TIMEFRAMES[self.config["timeframe"]]
+        bars_30d = max(1, int(30 * 86400 / tf_s))
+        long_ema = ema(closes, min(200, len(closes)))
+        with self.lock:
+            recent = [{"pnl_pct": round(t.get("pnl_pct") or 0, 2), "reason": t["reason"], "time": t["time"]}
+                      for t in self._mode_sells()[-6:]]
+        return {
+            "symbol": self.config["symbol"], "timeframe": self.config["timeframe"],
+            "close": close, "fast_ema": round(ind["fast"][i], 6), "slow_ema": round(ind["slow"][i], 6),
+            "long_ema_200": round(long_ema[i], 6), "price_above_long_ema": close > long_ema[i],
+            "atr_pct_of_price": round(atr_now / close * 100, 3),
+            "distance_above_slow_ema_in_atr": round((close - ind["slow"][i]) / atr_now, 2) if atr_now else None,
+            "change_pct_30d": round((close / closes[max(0, i - bars_30d)] - 1) * 100, 2),
+            "strategy": {"fast": p.fast, "slow": p.slow, "stop_atr_multiple": p.atr_mult},
+            "recent_closes_oldest_first": [round(c, 6) for c in closes[max(0, i - 59):i + 1]],
+            "this_bot_recent_closed_trades": recent,
+        }
+
+    def _ai_review(self, closed: list, ind: dict, i: int, p: Params):
+        """Ask the AI about a buy signal. Returns None (= trade normally) if the AI is unavailable."""
+        try:
+            return ai.review_entry(self._ai_context(closed, ind, i, p))
+        except ai.AIError as exc:
+            self.log(f"AI check unavailable ({exc}) - following the normal strategy.", "warn")
+        except Exception as exc:
+            self.log(f"AI check failed ({type(exc).__name__}) - following the normal strategy.", "warn")
+        return None
+
+    def _buy(self, atr_value: float, p: Params, reason: str = "EMA cross up") -> None:
         cfg = self.config
         fill = self.broker.buy(cfg["symbol"], float(cfg["trade_size"]))
         with self.lock:
@@ -232,7 +277,7 @@ class Bot:
                 "qty": fill.qty, "entry_price": fill.price, "cost": fill.quote, "entry_time": utc_now_iso(),
                 "high": fill.price, "stop": fill.price - p.atr_mult * atr_value,
             }
-            self._add_trade("buy", fill, "EMA cross up")
+            self._add_trade("buy", fill, reason)
         self.log(f"BUY {fill.qty:.8g} {cfg['symbol']} at {fmt(fill.price)} for {fmt(fill.quote)}. "
                  f"Stop starts at {fmt(self.state['position']['stop'])}.")
 
