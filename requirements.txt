@@ -4,3 +4,4 @@ uvicorn>=0.30
 requests>=2.31
 anthropic>=1.8
 cryptography>=42
+redis>=5
