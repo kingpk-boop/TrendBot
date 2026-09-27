@@ -72,18 +72,34 @@ def _sign(value: str) -> str:
     return hmac.new(_secret(), value.encode(), hashlib.sha256).hexdigest()
 
 
-def _password_token() -> str:
+def _password_basis() -> str:
+    """What password logins are checked against: the .env password, the password created on the website,
+    or - on the website before its database exists - the one-time setup code."""
     if PASSWORD:
-        return _sign(PASSWORD)
+        return "env:" + PASSWORD
     rec = _password_record()
-    return _sign(rec["hash"]) if rec else ""
+    if rec:
+        return "hash:" + rec["hash"]
+    if BACKTEST_ONLY and os.environ.get("VERCEL") and SETUP_CODE:
+        return "code:" + SETUP_CODE
+    return ""
+
+
+def _email_ok(email: str) -> bool:
+    return not ALLOWED_EMAILS or email.strip().lower() in ALLOWED_EMAILS
+
+
+def _password_token(email: str) -> str:
+    basis = _password_basis()
+    return _sign(f"login:{email.strip().lower()}:{basis}") if basis else ""
 
 
 def valid_tokens() -> list[str]:
     """Cookie values that prove a login. Empty list = no login configured (PC app on localhost)."""
     tokens = [_sign("google:" + email) for email in sorted(ALLOWED_EMAILS)] if GOOGLE_LOGIN else []
-    pw = _password_token()
-    return tokens + ([pw] if pw else [])
+    if _password_basis():
+        tokens += [_password_token(e) for e in (sorted(ALLOWED_EMAILS) or [""])]
+    return tokens
 
 
 def needs_setup() -> bool:
@@ -239,10 +255,12 @@ class BacktestIn(StrategyFields):
 
 
 class LoginIn(BaseModel):
-    password: str
+    email: str = Field("", max_length=200)
+    password: str = Field(max_length=200)
 
 
 class SetupIn(BaseModel):
+    email: str = Field("", max_length=200)
     code: str
     password: str = Field(min_length=10, max_length=200)
 
@@ -266,7 +284,9 @@ def meta(request: Request):
         "keys": keys_status(), "poll_seconds": POLL_SECONDS,
         "auth_required": bool(valid_tokens()), "backtest_only": BACKTEST_ONLY, "cloud": CLOUD,
         "google_client_id": GOOGLE_CLIENT_ID if GOOGLE_LOGIN else None,
-        "password_login": bool(_password_token()),
+        "password_login": bool(_password_basis()),
+        "email_login": bool(ALLOWED_EMAILS),
+        "code_login": _password_basis().startswith("code:"),
         "needs_setup": needs_setup(),
         "ai": {"source": None, "model": ai.MODEL} if BACKTEST_ONLY else ai.ai_status(),
         "scan_symbols": SCAN_SYMBOLS,
@@ -277,18 +297,24 @@ def meta(request: Request):
 
 
 def _password_ok(password: str) -> bool:
-    if PASSWORD:
+    basis = _password_basis()
+    if basis.startswith("env:"):
         return hmac.compare_digest(password, PASSWORD)
-    rec = _password_record()
-    return bool(rec) and hmac.compare_digest(_hash_password(password, rec["salt"]), rec["hash"])
+    if basis.startswith("hash:"):
+        rec = _password_record()
+        return hmac.compare_digest(_hash_password(password, rec["salt"]), rec["hash"])
+    if basis.startswith("code:"):
+        return hmac.compare_digest(password.strip(), SETUP_CODE)
+    return False
 
 
 @app.post("/api/login")
 async def login(body: LoginIn, request: Request):
-    if not await asyncio.to_thread(_password_ok, body.password):
+    email = body.email.strip().lower()
+    if not _email_ok(email) or not await asyncio.to_thread(_password_ok, body.password):
         await asyncio.sleep(1.5)  # slow down guessing
-        raise HTTPException(401, "Wrong password.")
-    return _auth_response(request, await asyncio.to_thread(_password_token))
+        raise HTTPException(401, "Wrong email or password.")
+    return _auth_response(request, await asyncio.to_thread(_password_token, email))
 
 
 class GoogleLoginIn(BaseModel):
@@ -327,6 +353,9 @@ async def setup(body: SetupIn, request: Request):
         raise HTTPException(400, "This TrendBot uses Google sign-in. Sign in with your Google account instead.")
     if not await asyncio.to_thread(needs_setup):
         raise HTTPException(400, "A password already exists. Log in instead.")
+    if not _email_ok(body.email):
+        await asyncio.sleep(1.5)
+        raise HTTPException(403, "That email isn't allowed to use this TrendBot.")
     if not SETUP_CODE or not hmac.compare_digest(body.code.strip(), SETUP_CODE):
         await asyncio.sleep(1.5)
         raise HTTPException(401, "That setup code isn't right.")
@@ -334,7 +363,7 @@ async def setup(body: SetupIn, request: Request):
     rec = {"salt": salt, "hash": _hash_password(body.password, salt), "created": time.time()}
     await asyncio.to_thread(store.set_json, "auth", rec)
     _password_cache = (time.time(), rec)
-    return _auth_response(request, _sign(rec["hash"]))
+    return _auth_response(request, await asyncio.to_thread(_password_token, body.email))
 
 
 @app.api_route("/api/cron/tick", methods=["GET", "POST"])
