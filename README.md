@@ -108,7 +108,11 @@ The Vercel website can be the whole app: bots, accounts and AI, with no PC neede
 2. **A free timer (cron-job.org)** that wakes the site every minute, so bots check prices around the clock.
    After logging in, the website's **Setup → Bot timer** card shows the exact link to paste and turns green when it works.
 
-On first visit the website asks for a **setup code** (the `TRENDBOT_SETUP_CODE` value in the Vercel project's
+**Sign in with Google (recommended):** set `GOOGLE_CLIENT_ID` (a Google Cloud OAuth client for this
+site) and `ALLOWED_EMAILS` (your Google address) in the Vercel project. Then only those Google accounts can
+get in, and no password is needed.
+
+Without Google sign-in, on first visit the website asks for a **setup code** (the `TRENDBOT_SETUP_CODE` value in the Vercel project's
 environment variables) and lets you create your password. Exchange and AI keys are stored encrypted with
 `TRENDBOT_SECRET`; don't change that value afterwards, or saved keys can't be read.
 
