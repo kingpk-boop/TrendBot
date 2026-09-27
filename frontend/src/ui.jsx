@@ -1,5 +1,6 @@
 /* Shared React building blocks: app context, dialogs, toasts, tiles, charts and hooks. */
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
+import { api } from "./api.js";
 import { Chart } from "./chart.js";
 import { exchangeLabel, fmtNum, modeLabel, quoteOf } from "./format.js";
 
@@ -186,6 +187,42 @@ export function ChartView({ data, message, short = false, id }) {
     <div className={"chart" + (short ? " short" : "")} id={id}>
       <div ref={el} style={{ position: "absolute", inset: 0 }} />
       {!data && <div className="msg">{message || "Loading chart…"}</div>}
+    </div>
+  );
+}
+
+/**
+ * "Ask the AI" button + answer. kind: backtest | scan | bot. Pass `data` (backtest/scan) or `botId`.
+ * Hidden on the public website; points to Setup when no AI key is connected.
+ */
+export function AIReview({ kind, data, botId, label = "Ask AI to review this" }) {
+  const { meta } = useApp();
+  const [state, setState] = useState({ busy: false, text: "", error: "" });
+  if (meta.backtest_only) return null;
+  if (!meta.ai?.source) return (
+    <p className="muted small ai-hint">Want a plain-language review from Claude AI? <a href="#/setup">Connect AI in Setup</a>.</p>
+  );
+  const ask = async () => {
+    setState({ busy: true, text: "", error: "" });
+    try {
+      const res = await api("/ai/analyze", { method: "POST", body: { kind, data, bot_id: botId } });
+      setState({ busy: false, text: res.text, error: "" });
+    } catch (e) {
+      setState({ busy: false, text: "", error: e.message });
+    }
+  };
+  return (
+    <div className="card ai-card">
+      <div className="card-head">
+        <h2><span className="ai-mark">AI</span> Claude's take</h2>
+        <button className="btn sm" onClick={ask} disabled={state.busy}>
+          {state.busy ? <><span className="spinner" /> Thinking…</> : state.text ? "Ask again" : label}</button>
+      </div>
+      {state.error && <div className="alert error" style={{ margin: 0 }}>{state.error}</div>}
+      {state.text ? <>
+        <div className="ai-text">{state.text}</div>
+        <p className="muted small" style={{ marginBottom: 0 }}>AI can be wrong and can't predict prices. Use this as a second opinion, not advice.</p>
+      </> : !state.error && <p className="muted small" style={{ margin: 0 }}>Claude reads these numbers and explains what they mean and what to try next (costs a few cents on your Anthropic account).</p>}
     </div>
   );
 }

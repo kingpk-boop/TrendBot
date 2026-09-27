@@ -35,6 +35,26 @@ Open the **Backtest** tab. You can do this in the PC app or on the online site.
 4. Try other coins (`ETH/USDT`, `SOL/USDT`) or candle sizes. Be wary of settings tuned until the past
    looks perfect. They rarely work as well in the future.
 
+## 2b. Find the best markets
+
+Open **Markets** and press **Scan markets**. TrendBot backtests the strategy on 12 popular coins (or your
+own list) and ranks them by **Score**: return divided by the worst drop, so steady gains rank above lucky,
+bumpy ones. A **new buy signal** badge means the bot would have just bought that market. Use **Backtest**
+on a row to look closer, or **Create bot** to paper trade it.
+
+## 2c. Optional: connect Claude AI
+
+In the PC app, **Setup → Claude AI** → paste an Anthropic API key (from console.anthropic.com; add a few
+dollars of credit). Then:
+- **Ask AI** buttons appear under backtests, market scans and bots, for a plain-language review.
+- The bot form gets **AI check before each buy**: when a buy signal appears, Claude looks at the market
+  (how stretched the price is, the longer trend, volatility, the bot's recent trades) and can **skip** a
+  trade that looks like a false start. It can't make trades bigger or remove the stop. If the AI is
+  unreachable, the bot follows its normal rules. Each check costs about 1-3 US cents.
+
+The AI is a second opinion, not a crystal ball. It can be wrong, and a backtest can't tell you how the AI
+check would have done in the past.
+
 ## 3. Make a paper bot (pretend money)
 
 1. In the PC app, go to **Bots → + New bot** (or **Create bot from these settings** after a backtest).

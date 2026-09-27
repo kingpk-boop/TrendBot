@@ -4,7 +4,7 @@ import { api } from "../api.js";
 import { candleIndex } from "../chart.js";
 import { ago, cls, exchangeLabel, fmtNum, fmtPrice, fmtQty, fmtTime, pct, quoteOf, signed } from "../format.js";
 import { BotForm } from "../forms.jsx";
-import { ChartView, Legend, ModeBadge, Spinner, Tile, useApp, usePolling } from "../ui.jsx";
+import { AIReview, ChartView, Legend, ModeBadge, Spinner, Tile, useApp, usePolling } from "../ui.jsx";
 
 /** Opens the bot form and goes to the saved bot. */
 export function useOpenBotForm() {
@@ -44,7 +44,7 @@ function BotCard({ b }) {
   return (
     <a className="bot-card" href={`#/bots/${encodeURIComponent(b.id)}`}>
       <div className="top"><span className={"dot " + dot} title={b.running ? "Running" : "Stopped"} />
-        <span className="name">{c.name}</span><ModeBadge mode={c.mode} exchange={c.exchange} /></div>
+        <span className="name">{c.name}</span>{c.ai_filter && <span className="badge ai" title="AI checks each buy">AI</span>}<ModeBadge mode={c.mode} exchange={c.exchange} /></div>
       <div className="meta">{c.symbol} · {exchangeLabel(meta, c.exchange)} · {c.timeframe} candles · {fmtNum(c.trade_size)} {quoteOf(meta, c)}/trade</div>
       <div className="figs">
         <div><div className="label">Price</div><div className="v">{fmtPrice(b.price)}</div></div>
@@ -80,7 +80,18 @@ export function BotsPage() {
       </div>
     </div>
   );
-  else body = <div className="bot-grid">{bots.map(b => <BotCard key={b.id} b={b} />)}</div>;
+  else {
+    const sum = k => bots.reduce((t, b) => t + (b[k] || 0), 0);
+    body = <>
+      <div className="tiles">
+        <Tile label="Running" value={`${bots.filter(b => b.running).length} of ${bots.length}`} sub="bots watching the market" />
+        <Tile label="Open positions" value={String(bots.filter(b => b.position).length)} sub={bots.some(b => b.position) ? `open P&L ${signed(sum("unrealized"))}` : "none right now"} />
+        <Tile label="Today" value={<span className={cls(sum("today_pnl"))}>{signed(sum("today_pnl"))}</span>} sub="closed trades, all bots" />
+        <Tile label="Total P&L" value={<span className={cls(sum("total_pnl"))}>{signed(sum("total_pnl"))}</span>} sub={`${sum("trades_count")} trades, ${sum("wins")} won`} />
+      </div>
+      <div className="bot-grid">{bots.map(b => <BotCard key={b.id} b={b} />)}</div>
+    </>;
+  }
 
   return (
     <>
@@ -188,7 +199,7 @@ export function BotPage({ id }) {
     <>
       <a className="crumb" href="#/bots">← All bots</a>
       <div className="page-head" style={{ marginTop: 6 }}>
-        <div className="grow"><h1 id="bot-title">{c.name} <ModeBadge mode={c.mode} exchange={c.exchange} /></h1>
+        <div className="grow"><h1 id="bot-title">{c.name} <ModeBadge mode={c.mode} exchange={c.exchange} />{c.ai_filter && <> <span className="badge ai" title="AI checks each buy">AI check</span></>}</h1>
           <div className="muted small">{c.symbol} on {exLabel} · {c.timeframe} candles · EMA {c.fast}/{c.slow} · stop {c.atr_mult}× ATR({c.atr_period}) · {fmtNum(c.trade_size)} {q} per trade · daily loss cap {c.daily_loss_cap > 0 ? `${fmtNum(c.daily_loss_cap)} ${q}` : "off"}</div></div>
         <div className="btn-row" id="bot-actions">
           {bot.running ? btn("stop", "■ Stop") : btn("start", "▶ Start", "go")}
@@ -217,6 +228,7 @@ export function BotPage({ id }) {
       </div>
 
       <BotChart id={id} bot={bot} />
+      <AIReview kind="bot" botId={id} label="Ask AI about this bot" />
 
       <div className="two-col">
         <div className="card"><h2>Trades</h2>

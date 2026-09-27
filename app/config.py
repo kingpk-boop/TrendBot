@@ -80,6 +80,11 @@ def remove_account(exchange: str, mode: str) -> None:
             ACCOUNTS_FILE.write_text(json.dumps(data, indent=1), encoding="utf-8")
 
 
+def load_stored_secret(provider: str, mode: str) -> str | None:
+    """A single stored key (used for the Anthropic API key, which has no separate secret)."""
+    return (_load_accounts().get(provider, {}).get(mode) or {}).get("api_key") or None
+
+
 def _env_keys(exchange: str, mode: str) -> tuple[str, str]:
     key_name, secret_name = key_env_names(exchange, mode)
     return os.environ.get(key_name, "").strip(), os.environ.get(secret_name, "").strip()

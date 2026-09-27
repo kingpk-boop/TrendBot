@@ -2,10 +2,12 @@
 import asyncio
 import hashlib
 import hmac
+import json
 import os
 import re
 import secrets
 import time
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 
 import ccxt
@@ -14,11 +16,12 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, model_validator
 
+from . import ai
 from .config import (BACKTEST_ONLY, DATA_DIR, EXCHANGES, MODES, POLL_SECONDS, TIMEFRAMES, WEB_DIR, api_keys, key_source,
                      keys_status, load_dotenv, remove_account, save_account)
 from .engine import BotManager, BotNotFound
 from .exchanges import ALPACA_BARS_PER_DAY, MarketError, make_market, verify_account
-from .strategy import Params, backtest, warmup_bars
+from .strategy import Params, backtest, compute, entry_signal, warmup_bars
 
 load_dotenv()
 PASSWORD = os.environ.get("BOT_UI_PASSWORD", "")
@@ -52,7 +55,7 @@ app = FastAPI(title="TrendBot", lifespan=lifespan, docs_url=None, redoc_url=None
 async def guard(request: Request, call_next):
     path = request.url.path
     if path.startswith("/api/"):
-        if BACKTEST_ONLY and path.startswith(("/api/bots", "/api/accounts")):
+        if BACKTEST_ONLY and path.startswith(("/api/bots", "/api/accounts", "/api/ai")):
             return JSONResponse({"detail": "This online version only runs backtests. Bots and exchange accounts "
                                            "live in TrendBot on your PC."}, 403)
         host = (request.headers.get("host") or "").rsplit(":", 1)[0].lower()
@@ -82,6 +85,11 @@ async def exchange_unreachable(_req, exc: ccxt.NetworkError):
 @app.exception_handler(ccxt.BaseError)
 async def exchange_error(_req, exc: ccxt.BaseError):
     return JSONResponse({"detail": f"Exchange error: {str(exc)[:300]}"}, 502)
+
+
+@app.exception_handler(ai.AIError)
+async def ai_error(_req, exc: ai.AIError):
+    return JSONResponse({"detail": str(exc)}, 400)
 
 
 @app.exception_handler(BotNotFound)
@@ -123,6 +131,7 @@ class StrategyFields(BaseModel):
 class BotConfigIn(StrategyFields):
     name: str = Field("", max_length=40)
     mode: str = "paper"
+    ai_filter: bool = False  # ask the AI to approve each buy signal
     confirm_live: bool = False
 
     @model_validator(mode="after")
@@ -162,6 +171,8 @@ def meta(request: Request):
         "exchanges": EXCHANGES, "timeframes": list(TIMEFRAMES), "modes": list(MODES),
         "keys": keys_status(), "poll_seconds": POLL_SECONDS,
         "auth_required": bool(PASSWORD), "backtest_only": BACKTEST_ONLY,
+        "ai": {"source": None, "model": ai.MODEL} if BACKTEST_ONLY else ai.ai_status(),
+        "scan_symbols": SCAN_SYMBOLS,
         "logged_in": not PASSWORD or hmac.compare_digest(request.cookies.get("tb_auth", ""), AUTH_TOKEN),
         "defaults": BotConfigIn().to_config(),
     }
@@ -243,12 +254,7 @@ def _bots_blocking(exchange: str, mode: str) -> list[str]:
 @app.post("/api/accounts/{exchange}/{mode}")
 def connect_account(exchange: str, mode: str, body: AccountIn, request: Request):
     _account_target(exchange, mode)
-    client = request.client.host if request.client else ""
-    secure = client in ("127.0.0.1", "::1") or request.url.scheme == "https" or \
-        request.headers.get("x-forwarded-proto") == "https"
-    if not secure:
-        raise HTTPException(403, "For safety, connect accounts on the computer running TrendBot (or over https), "
-                                 "not over your home network.")
+    _require_secure(request)
     if key_source(exchange, mode) == "env":
         raise HTTPException(400, "This account's keys are set in the .env file. Remove them there to connect here.")
     blocking = _bots_blocking(exchange, mode)
@@ -289,41 +295,176 @@ def disconnect_account(exchange: str, mode: str):
 
 
 _history_cache: dict[tuple, tuple[float, list]] = {}
+HISTORY_CACHE_SIZE = 40
 
 
-def _history(exchange: str, symbol: str, timeframe: str, since_ms: int) -> list:
+def _history(exchange: str, symbol: str, timeframe: str, since_ms: int, market=None) -> list:
     key = (exchange, symbol, timeframe, since_ms // 3_600_000)
     hit = _history_cache.get(key)
     if hit and time.time() - hit[0] < 600:
         return hit[1]
-    market = make_market(exchange, "paper")
-    market.validate(symbol, 1e9)  # symbol check only; trade size isn't the point here
+    if market is None:
+        market = make_market(exchange, "paper")
+        market.validate(symbol, 1e9)  # symbol check only; trade size isn't the point here
     candles = market.fetch_history(symbol, timeframe, since_ms)
-    _history_cache.clear()  # keep just the latest series in memory
     _history_cache[key] = (time.time(), candles)
+    while len(_history_cache) > HISTORY_CACHE_SIZE:  # drop the oldest entries
+        del _history_cache[min(_history_cache, key=lambda k: _history_cache[k][0])]
     return candles
+
+
+def _simulate(f: StrategyFields, symbol: str, days: int, market=None) -> tuple[dict, list, Params]:
+    """Backtest one market. Returns (result, closed candles, params)."""
+    p = Params(f.fast, f.slow, f.atr_period, f.atr_mult)
+    tf_s = TIMEFRAMES[f.timeframe]
+    if EXCHANGES[f.exchange]["kind"] == "stocks":
+        warm_days = warmup_bars(p) / ALPACA_BARS_PER_DAY[f.timeframe] * 1.45 + 10
+    else:
+        warm_days = warmup_bars(p) * tf_s / 86400 + 2
+    now_ms = int(time.time() * 1000)
+    start_ms = now_ms - days * 86_400_000
+    candles = _history(f.exchange, symbol, f.timeframe, int(start_ms - warm_days * 86_400_000), market)
+    closed = [c for c in candles if c[0] + tf_s * 1000 <= now_ms]
+    try:
+        result = backtest(closed, p, f.trade_size, EXCHANGES[f.exchange]["fee"], f.daily_loss_cap, start_ts=start_ms)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    return result, closed, p
 
 
 @app.post("/api/backtest")
 def run_backtest(body: BacktestIn):
-    p = Params(body.fast, body.slow, body.atr_period, body.atr_mult)
-    tf_s = TIMEFRAMES[body.timeframe]
-    if EXCHANGES[body.exchange]["kind"] == "stocks":
-        warm_days = warmup_bars(p) / ALPACA_BARS_PER_DAY[body.timeframe] * 1.45 + 10
-    else:
-        warm_days = warmup_bars(p) * tf_s / 86400 + 2
-    now_ms = int(time.time() * 1000)
-    start_ms = now_ms - body.days * 86_400_000
-    candles = _history(body.exchange, body.symbol, body.timeframe, int(start_ms - warm_days * 86_400_000))
-    closed = [c for c in candles if c[0] + tf_s * 1000 <= now_ms]
-    try:
-        result = backtest(closed, p, body.trade_size, EXCHANGES[body.exchange]["fee"],
-                          body.daily_loss_cap, start_ts=start_ms)
-    except ValueError as exc:
-        raise HTTPException(400, str(exc))
+    result, _, _ = _simulate(body, body.symbol, body.days)
     result["fee_rate"] = EXCHANGES[body.exchange]["fee"]
     result["request"] = body.model_dump()
     return result
+
+
+# ---------------------------------------------------------------------------- market scanner
+
+SCAN_SYMBOLS = {
+    "crypto": ["BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT", "XRP/USDT", "ADA/USDT",
+               "DOGE/USDT", "AVAX/USDT", "LINK/USDT", "DOT/USDT", "LTC/USDT", "TRX/USDT"],
+    "stocks": ["SPY", "QQQ", "AAPL", "MSFT", "NVDA", "AMZN", "GOOGL", "META", "TSLA", "AMD"],
+}
+
+
+class ScanIn(StrategyFields):
+    days: int = Field(365, ge=30, le=1100)
+    symbols: list[str] = Field(default_factory=list, max_length=20)
+
+    @model_validator(mode="after")
+    def _check_symbols(self):
+        kind = EXCHANGES[self.exchange]["kind"]
+        pattern = r"[A-Z0-9]{2,12}/[A-Z0-9]{2,12}" if kind == "crypto" else r"[A-Z][A-Z.]{0,9}"
+        clean = []
+        for raw in self.symbols or SCAN_SYMBOLS[kind]:
+            sym = raw.strip().upper()
+            if sym and sym not in clean:
+                if not re.fullmatch(pattern, sym):
+                    raise ValueError(f"'{raw}' isn't a valid symbol here " + ("(like BTC/USDT)." if kind == "crypto" else "(like AAPL)."))
+                clean.append(sym)
+        self.symbols = clean
+        return self
+
+
+def _scan_one(body: ScanIn, symbol: str, market) -> dict:
+    try:
+        r, closed, p = _simulate(body, symbol, body.days, market)
+    except HTTPException as exc:
+        return {"symbol": symbol, "ok": False, "error": str(exc.detail)}
+    except Exception as exc:  # unknown symbol, exchange hiccup... one bad row shouldn't sink the scan
+        msg = str(exc) if isinstance(exc, MarketError) else f"{type(exc).__name__}: {str(exc)[:120]}"
+        return {"symbol": symbol, "ok": False, "error": msg}
+    ind = compute(closed, p)
+    last = len(closed) - 1
+    fresh = any(entry_signal(ind, i) for i in range(max(1, last - 2), last + 1))
+    dd = r["strategy_max_dd_pct"]
+    return {
+        "symbol": symbol, "ok": True,
+        "strategy_return_pct": r["strategy_return_pct"], "hold_return_pct": r["hold_return_pct"],
+        "strategy_max_dd_pct": dd, "hold_max_dd_pct": r["hold_max_dd_pct"],
+        "trades_count": r["trades_count"], "win_rate_pct": r["win_rate_pct"],
+        "time_in_market_pct": r["time_in_market_pct"], "total_pnl": r["total_pnl"],
+        "open_position": r["open_position"] is not None,
+        "trend": "up" if ind["fast"][last] > ind["slow"][last] else "down",
+        "fresh_signal": fresh, "last_price": closed[last][4],
+        # Return earned per unit of pain: rewards steady gains over lucky, bumpy ones.
+        "score": r["strategy_return_pct"] / max(5.0, abs(dd)),
+    }
+
+
+@app.post("/api/scan")
+def scan(body: ScanIn):
+    market = make_market(body.exchange, "paper")
+    if EXCHANGES[body.exchange]["kind"] == "crypto":
+        market._markets()  # load the exchange's market list once, shared by all threads
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        rows = list(pool.map(lambda sym: _scan_one(body, sym, market), body.symbols))
+    rows.sort(key=lambda r: (not r["ok"], -(r.get("score") or 0)))
+    return {"request": body.model_dump(), "rows": rows, "fee_rate": EXCHANGES[body.exchange]["fee"]}
+
+
+# ---------------------------------------------------------------------------- AI (PC app only)
+
+class AIKeyIn(BaseModel):
+    api_key: str = Field(min_length=20, max_length=300)
+
+
+class AnalyzeIn(BaseModel):
+    kind: str
+    data: dict | None = None
+    bot_id: str | None = None
+
+
+def _require_secure(request: Request) -> None:
+    client = request.client.host if request.client else ""
+    if not (client in ("127.0.0.1", "::1") or request.url.scheme == "https"
+            or request.headers.get("x-forwarded-proto") == "https"):
+        raise HTTPException(403, "For safety, connect keys on the computer running TrendBot (or over https), "
+                                 "not over your home network.")
+
+
+@app.post("/api/ai/key")
+def connect_ai(body: AIKeyIn, request: Request):
+    _require_secure(request)
+    if ai.ai_key()[1] == "env":
+        raise HTTPException(400, "The AI key is set in the .env file. Remove it there to connect here.")
+    ai.connect(body.api_key)
+    return ai.ai_status()
+
+
+@app.delete("/api/ai/key")
+def disconnect_ai():
+    if ai.ai_key()[1] == "env":
+        raise HTTPException(400, "The AI key comes from the .env file. Delete it there and restart TrendBot.")
+    ai.disconnect()
+    return ai.ai_status()
+
+
+def _trim_for_ai(kind: str, data: dict) -> dict:
+    data = dict(data or {})
+    if kind == "backtest":
+        data.pop("curve", None)
+        data["trades"] = (data.get("trades") or [])[-80:]
+    if kind == "scan":
+        data["rows"] = (data.get("rows") or [])[:25]
+    if len(json.dumps(data, default=str)) > 60_000:
+        raise HTTPException(400, "That's too much data to send to the AI.")
+    return data
+
+
+@app.post("/api/ai/analyze")
+def ai_analyze(body: AnalyzeIn):
+    if body.kind == "bot":
+        if not body.bot_id:
+            raise HTTPException(400, "Missing bot.")
+        d = manager.get(body.bot_id).detail()
+        d["trades"], d["log"] = d["trades"][:30], d["log"][:30]
+        data = d
+    else:
+        data = _trim_for_ai(body.kind, body.data)
+    return {"text": ai.analyze(body.kind, data), "model": ai.MODEL}
 
 
 app.mount("/", StaticFiles(directory=WEB_DIR, html=True), name="web")
