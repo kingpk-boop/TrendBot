@@ -1,7 +1,7 @@
-"""Cloud storage for the online version: Upstash Redis over its REST API.
+"""Cloud storage for the online version: a free Redis database (Upstash REST API or a plain REDIS_URL).
 
 On your PC TrendBot keeps everything in the data/ folder. On the website (Vercel) there is no lasting
-disk, so bots, connected accounts and the login live in a free Upstash Redis database instead. Secrets
+disk, so bots, connected accounts and the login live in a free Redis database instead. Secrets
 (exchange and AI keys) are encrypted with TRENDBOT_SECRET before they're stored.
 """
 import base64
@@ -17,7 +17,9 @@ from cryptography.fernet import Fernet, InvalidToken
 # Vercel's Upstash integration sets KV_REST_API_*; a database made on upstash.com uses UPSTASH_REDIS_REST_*.
 REDIS_URL = (os.environ.get("KV_REST_API_URL") or os.environ.get("UPSTASH_REDIS_REST_URL") or "").rstrip("/")
 REDIS_TOKEN = os.environ.get("KV_REST_API_TOKEN") or os.environ.get("UPSTASH_REDIS_REST_TOKEN") or ""
-CLOUD = bool(REDIS_URL and REDIS_TOKEN)
+# Other Redis providers on Vercel's marketplace (e.g. Redis Cloud) give a normal redis:// or rediss:// URL.
+REDIS_TCP_URL = os.environ.get("REDIS_URL") or os.environ.get("KV_URL") or ""
+CLOUD = bool((REDIS_URL and REDIS_TOKEN) or REDIS_TCP_URL)
 
 PREFIX = "trendbot:"
 BOTS_KEY = PREFIX + "bots"
@@ -91,7 +93,48 @@ class RedisStore:
             pass  # the lock expires on its own
 
 
-store = RedisStore(REDIS_URL, REDIS_TOKEN) if CLOUD else None
+class TcpRedisStore(RedisStore):
+    """The same store over a normal Redis connection (redis:// or rediss:// URL)."""
+
+    def __init__(self, url: str):
+        import redis
+        self.errors = (redis.RedisError,)
+        self.r = redis.Redis.from_url(url, decode_responses=True, socket_timeout=15, socket_connect_timeout=10,
+                                      health_check_interval=30)
+
+    @staticmethod
+    def _raw(v):
+        """Give replies the same shapes as the REST API: "OK" for success, flat lists for HGETALL."""
+        if v is True:
+            return "OK"
+        if isinstance(v, dict):
+            return [x for kv in v.items() for x in kv]
+        return v
+
+    def cmd(self, *args):
+        try:
+            return self._raw(self.r.execute_command(*[str(a) for a in args]))
+        except self.errors as e:
+            raise StoreError(f"Database error: {e}") from None
+
+    def pipeline(self, commands: list[list]) -> list:
+        if not commands:
+            return []
+        try:
+            p = self.r.pipeline(transaction=False)
+            for c in commands:
+                p.execute_command(*[str(a) for a in c])
+            return [self._raw(v) for v in p.execute()]
+        except self.errors as e:
+            raise StoreError(f"Database error: {e}") from None
+
+
+if REDIS_URL and REDIS_TOKEN:
+    store = RedisStore(REDIS_URL, REDIS_TOKEN)
+elif REDIS_TCP_URL:
+    store = TcpRedisStore(REDIS_TCP_URL)
+else:
+    store = None
 
 
 # ---------------------------------------------------------------- encryption for secrets
