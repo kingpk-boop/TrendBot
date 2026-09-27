@@ -309,7 +309,7 @@ def meta(request: Request):
         "email_login": bool(ALLOWED_EMAILS),
         "code_login": _password_basis().startswith("code:"),
         "needs_setup": needs_setup(),
-        "ai": {"source": None, "model": ai.MODEL} if BACKTEST_ONLY else ai.ai_status(),
+        "ai": {"source": None, "model": None} if BACKTEST_ONLY else ai.ai_status(),
         "scan_symbols": SCAN_SYMBOLS,
         "storage_setup_url": os.environ.get("TRENDBOT_STORAGE_URL") or None,
         "logged_in": _logged_in(request) and not needs_setup(),
@@ -696,7 +696,7 @@ def ai_analyze(body: AnalyzeIn):
         data = d
     else:
         data = _trim_for_ai(body.kind, body.data)
-    return {"text": ai.analyze(body.kind, data), "model": ai.MODEL}
+    return {"text": ai.analyze(body.kind, data)}
 
 
 app.mount("/", StaticFiles(directory=WEB_DIR, html=True), name="web")

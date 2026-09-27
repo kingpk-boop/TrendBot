@@ -119,7 +119,7 @@ function AICard() {
       ) : src ? (
         <div className="acct-main" style={{ alignItems: "center" }}>
           <div><span className="key-ok">✓ Connected</span>{src === "env" && <span className="muted small"> (from .env)</span>}
-            <span className="muted small"> · model {meta.ai.model}</span></div>
+            <span className="muted small"> · {meta.ai.model}</span></div>
           {src === "app" && <button className="btn sm danger" id="ai-disconnect" onClick={disconnect}>Disconnect</button>}
         </div>
       ) : (
@@ -136,7 +136,7 @@ function AICard() {
               {busy ? <><span className="spinner" /> Checking…</> : "Connect AI"}</button>
           </div>
           {error && <div className="alert error" id="ai-err" style={{ margin: "12px 0 0" }}>{error}</div>}
-          <p className="muted small" style={{ marginBottom: 0 }}>Cost: roughly 1-3 US cents per review or trade check, billed by Anthropic. You can set a spending limit in the Anthropic console.</p>
+          <p className="muted small" style={{ marginBottom: 0 }}>Cost: roughly 5-15 US cents per review or AI decision (Claude Opus 5.5 / Opus 5 at high effort), billed by Anthropic. You can set a spending limit in the Anthropic console.</p>
         </form>
       )}
     </div>
