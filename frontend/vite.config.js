@@ -6,6 +6,7 @@ import { defineConfig } from "vite";
 export default defineConfig({
   plugins: [react()],
   base: "./",
-  build: { outDir: "../web", emptyOutDir: true },
+  // Target older phones and browsers too (iOS 14+, Chrome/Edge 87+, Firefox 78+).
+  build: { outDir: "../web", emptyOutDir: true, target: ["es2020", "safari14", "chrome87", "edge88", "firefox78"] },
   server: { proxy: { "/api": "http://127.0.0.1:8765" } },
 });

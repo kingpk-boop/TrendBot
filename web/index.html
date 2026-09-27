@@ -15,11 +15,37 @@
     // Apply a saved theme before the page paints, so there's no flash.
     try { const t = localStorage.getItem("tb-theme"); if (t) document.documentElement.dataset.theme = t; } catch (e) {}
   </script>
-  <script type="module" crossorigin src="./assets/index-DyxSJhkZ.js"></script>
-  <link rel="stylesheet" crossorigin href="./assets/index-BrsakUeF.css">
+  <script type="module" crossorigin src="./assets/index-DUq9aqBn.js"></script>
+  <link rel="stylesheet" crossorigin href="./assets/index-DpiVDdVk.css">
 </head>
 <body>
-  <div id="root"></div>
+  <div id="root"><div id="boot" style="font:15px system-ui,sans-serif;text-align:center;padding:80px 20px;color:#8a929c">Loading TrendBot…</div></div>
   <noscript>TrendBot needs JavaScript enabled.</noscript>
+  <script>
+    // Safety net: if the app hasn't started after a few seconds (old browser, stale cached copy, network
+    // problem), show a message and a reset button instead of a blank page.
+    (function () {
+      var errors = [];
+      window.addEventListener("error", function (e) { errors.push(e.message || String(e)); });
+      window.addEventListener("unhandledrejection", function (e) { errors.push(String(e.reason)); });
+      window.tbReset = function () {
+        var jobs = [];
+        try { if (navigator.serviceWorker) jobs.push(navigator.serviceWorker.getRegistrations().then(function (rs) { return Promise.all(rs.map(function (r) { return r.unregister(); })); })); } catch (e) {}
+        try { if (window.caches) jobs.push(caches.keys().then(function (ks) { return Promise.all(ks.map(function (k) { return caches.delete(k); })); })); } catch (e) {}
+        Promise.all(jobs).then(function () { location.reload(); }, function () { location.reload(); });
+      };
+      setTimeout(function () {
+        if (window.__tbStarted) return;
+        var root = document.getElementById("root");
+        root.innerHTML = '<div style="font:15px system-ui,sans-serif;max-width:420px;margin:60px auto;padding:20px;text-align:center">' +
+          '<h2 style="margin:0 0 10px">TrendBot didn\'t start</h2>' +
+          '<p>Your browser may have an old copy of the site, or it may be too old. Try this first:</p>' +
+          '<button onclick="tbReset()" style="font:inherit;font-weight:600;padding:10px 18px;border-radius:8px;border:0;background:#2a78d6;color:#fff;cursor:pointer">Reset and reload</button>' +
+          '<p style="color:#8a929c;font-size:13px;margin-top:16px">Still blank? Update your browser (Chrome, Safari or Edge) and try again.</p>' +
+          (errors.length ? '<pre style="text-align:left;white-space:pre-wrap;font-size:12px;color:#d23c3c">' + errors.join("\n").replace(/</g, "&lt;") + '</pre>' : '') +
+          '</div>';
+      }, 8000);
+    })();
+  </script>
 </body>
 </html>
