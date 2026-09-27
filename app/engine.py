@@ -1,8 +1,13 @@
-"""Bot runtime: one thread per running bot, state persisted to data/bots/<id>.json.
+"""Bot runtime.
 
 Each minute a running bot: checks the price against its ATR trailing stop, and when a new
 candle has closed, recomputes the EMAs and acts on a cross. It resumes after a restart.
+
+On your PC each running bot has its own thread and state lives in data/bots/<id>.json.
+On the website (store.CLOUD) there are no long-lived threads: bots live in the cloud database,
+every request loads them fresh, and a scheduler calls cron_tick() once a minute.
 """
+import contextlib
 import copy
 import json
 import os
@@ -14,6 +19,7 @@ from datetime import datetime, timezone
 from . import ai
 from .config import BOTS_DIR, EXCHANGES, POLL_SECONDS, TIMEFRAMES
 from .exchanges import MarketError, NothingToSell, make_broker, make_market
+from .store import CLOUD, store
 from .strategy import Params, compute, ema, entry_signal, exit_signal, warmup_bars
 
 MAX_LOG = 300
@@ -40,7 +46,8 @@ def new_state() -> dict:
 
 
 class Bot:
-    def __init__(self, bot_id: str, config: dict, state: dict | None = None, created: str | None = None):
+    def __init__(self, bot_id: str, config: dict, state: dict | None = None, created: str | None = None,
+                 runtime: dict | None = None):
         self.id = bot_id
         self.config = config
         self.state = {**new_state(), **(state or {})}
@@ -53,9 +60,10 @@ class Bot:
         self.market = self.broker = None
         self._chart_market = None
         self._chart_cache: tuple[float, dict | None] = (0.0, None)
-        self._last_error: str | None = None
         self.runtime = {"price": None, "price_time": None, "error": None, "market_open": None,
-                        "last_tick": None}
+                        "last_tick": None, **(runtime or {})}
+        self._last_error: str | None = self.runtime["error"]
+        self._dirty = False
 
     # ------------------------------------------------------------------ persistence / logging
 
@@ -63,7 +71,15 @@ class Bot:
     def path(self):
         return BOTS_DIR / f"{self.id}.json"
 
+    def doc(self) -> dict:
+        with self.lock:
+            return copy.deepcopy({"id": self.id, "created": self.created, "config": self.config,
+                                  "state": self.state, "runtime": self.runtime})
+
     def save(self) -> None:
+        if CLOUD:  # written to the database once, when the request or tick finishes
+            self._dirty = True
+            return
         with self.lock:
             text = json.dumps({"id": self.id, "created": self.created, "config": self.config,
                                "state": self.state}, indent=1)
@@ -97,6 +113,8 @@ class Bot:
 
     @property
     def running(self) -> bool:
+        if CLOUD:
+            return bool(self.state.get("running"))
         return self._thread is not None and self._thread.is_alive() and not self._stop.is_set()
 
     def reset_connections(self) -> None:
@@ -110,6 +128,12 @@ class Bot:
         self.market, self.broker = market, make_broker(cfg["exchange"], cfg["mode"], market)
 
     def start(self, validate: bool = True) -> None:
+        if CLOUD:
+            self._connect()
+            with self.lock:
+                self.state["running"] = True
+            self._log_started()
+            return
         if self._thread and self._thread.is_alive():
             if not self._stop.is_set():
                 return
@@ -134,22 +158,27 @@ class Bot:
         else:
             self.save()
 
-    def _run(self) -> None:
+    def _log_started(self) -> None:
         cfg = self.config
         self.log(f"Started in {cfg['mode'].upper()} mode: {cfg['symbol']} on "
                  f"{EXCHANGES[cfg['exchange']]['label']}, {cfg['timeframe']} candles, "
                  f"{fmt(cfg['trade_size'])} per trade.")
+
+    def check_once(self) -> None:
+        """One monitoring pass; network blips and the like are logged, not raised."""
+        try:
+            if self.market is None:
+                self._connect()
+            with self.op_lock:
+                self.tick()
+            self._clear_error()
+        except Exception as exc:
+            self._error(exc)
+
+    def _run(self) -> None:
+        self._log_started()
         while not self._stop.is_set():
-            try:
-                if self.market is None:
-                    self._connect()
-                with self.op_lock:
-                    if self._stop.is_set():
-                        break
-                    self.tick()
-                self._clear_error()
-            except Exception as exc:  # keep running through network blips etc.
-                self._error(exc)
+            self.check_once()
             self._stop.wait(POLL_SECONDS)
 
     # ------------------------------------------------------------------ trading
@@ -400,10 +429,16 @@ class Bot:
         return data
 
 
+class BusyError(MarketError):
+    pass
+
+
 class BotManager:
     def __init__(self):
-        BOTS_DIR.mkdir(parents=True, exist_ok=True)
         self.bots: dict[str, Bot] = {}
+        if CLOUD:
+            return
+        BOTS_DIR.mkdir(parents=True, exist_ok=True)
         for f in sorted(BOTS_DIR.glob("*.json")):
             try:
                 d = json.loads(f.read_text(encoding="utf-8"))
@@ -411,7 +446,59 @@ class BotManager:
             except Exception as exc:
                 print(f"Skipping unreadable bot file {f.name}: {exc}")
 
+    # ------------------------------------------------------------------ cloud (website) mode
+
+    def _load_cloud(self) -> None:
+        self.bots = {bid: Bot(bid, d["config"], d.get("state"), d.get("created"), d.get("runtime"))
+                     for bid, d in store.load_bots().items()}
+
+    def _flush_cloud(self, extra: list | None = None) -> None:
+        dirty = {b.id: b.doc() for b in self.bots.values() if b._dirty}
+        store.save_bots(dirty, extra)
+        for b in self.bots.values():
+            b._dirty = False
+
+    @contextlib.contextmanager
+    def session(self, write: bool = False):
+        """Wrap each web request. On the website: load bots fresh, and for changes hold the lock
+        (so a change can't collide with the minute-by-minute check) and save afterwards."""
+        if not CLOUD:
+            yield
+            return
+        token = store.acquire("bots", ttl_s=50, wait_s=20) if write else None
+        if write and token is None:
+            raise BusyError("The bots are busy with their scheduled check. Try again in a few seconds.")
+        try:
+            self._load_cloud()
+            yield
+            if write:
+                self._flush_cloud()
+        finally:
+            if token:
+                store.release("bots", token)
+
+    def cron_tick(self) -> dict:
+        """Called by the scheduler once a minute on the website: one check for every running bot."""
+        now = utc_now_iso()
+        token = store.acquire("bots", ttl_s=55, wait_s=5)
+        if token is None:
+            return {"ok": False, "detail": "Previous check still running."}
+        try:
+            self._load_cloud()
+            running = [b for b in self.bots.values() if b.running]
+            for bot in running:
+                bot.check_once()
+                bot._dirty = True
+            self._flush_cloud([["SET", "trendbot:cron_last", now]])
+            return {"ok": True, "checked": len(running), "time": now}
+        finally:
+            store.release("bots", token)
+
+    # ------------------------------------------------------------------ both modes
+
     def resume(self) -> None:
+        if CLOUD:
+            return
         for bot in self.bots.values():
             if bot.state.get("running"):
                 bot.start(validate=False)  # connects inside its thread, retrying if offline
@@ -469,4 +556,7 @@ class BotManager:
         if bot.state["position"]:
             raise MarketError("This bot still holds a position. Close it first.")
         del self.bots[bot_id]
-        bot.path.unlink(missing_ok=True)
+        if CLOUD:
+            store.delete_bot(bot_id)
+        else:
+            bot.path.unlink(missing_ok=True)

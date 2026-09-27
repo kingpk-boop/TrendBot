@@ -19,13 +19,17 @@ export function useHash() {
   return hash;
 }
 
-/** Runs fn now and every `ms` while the component is mounted. */
+let pollFloor = 0;
+/** On the website, poll less often to stay within the free database's limits. */
+export function setPollFloor(ms) { pollFloor = ms; }
+
+/** Runs fn now and every `ms` while the component is mounted (skipped while the tab is hidden). */
 export function usePolling(fn, ms, deps = []) {
   const ref = useRef(fn);
   ref.current = fn;
   useEffect(() => {
     ref.current();
-    const t = setInterval(() => ref.current(), ms);
+    const t = setInterval(() => { if (!document.hidden) ref.current(); }, Math.max(ms, pollFloor));
     return () => clearInterval(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ms, ...deps]);

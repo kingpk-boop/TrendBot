@@ -1,9 +1,9 @@
 /* Setup & safety: exchange accounts, recommended path, running it, and what the bot can't do. */
 import { useState } from "react";
 import { api } from "../api.js";
-import { accountName, fmtQty } from "../format.js";
+import { accountName, ago, fmtQty } from "../format.js";
 import { ConnectDialog } from "../forms.jsx";
-import { Modal, useApp } from "../ui.jsx";
+import { Modal, useApp, usePolling } from "../ui.jsx";
 
 const TUTORIAL = "https://github.com/kingpk-boop/TrendBot/blob/main/TUTORIAL.md";
 
@@ -135,7 +135,7 @@ function AICard() {
           <ol className="small" style={{ paddingLeft: 18 }}>
             <li>Create an account at <a href="https://console.anthropic.com/" target="_blank" rel="noopener">console.anthropic.com ↗</a> and add a little credit (for example $5).</li>
             <li>Go to <b>API Keys → Create Key</b> and copy it.</li>
-            <li>Paste it below. TrendBot checks it and stores it only on this computer.</li>
+            <li>Paste it below. TrendBot checks it and stores it {meta.cloud ? "encrypted in your private database" : "only on this computer"}.</li>
           </ol>
           <div className="btn-row" style={{ alignItems: "flex-end" }}>
             <label className="field" style={{ flex: 1, minWidth: 220 }}>Anthropic API key
@@ -151,12 +151,54 @@ function AICard() {
   );
 }
 
+/** Website: the scheduler that runs each bot's minute-by-minute check. */
+function TimerCard() {
+  const { toast } = useApp();
+  const [info, setInfo] = useState(null);
+  const [error, setError] = useState("");
+  usePolling(async () => {
+    try { setInfo(await api("/cron/info")); setError(""); } catch (e) { setError(e.message); }
+  }, 30000);
+  const lastMs = info?.last_run ? Date.parse(info.last_run) : null;
+  const healthy = lastMs && Date.now() - lastMs < 3 * 60 * 1000;
+  const copy = async () => {
+    try { await navigator.clipboard.writeText(info.url); toast("Link copied."); } catch { toast("Select the link and copy it.", true); }
+  };
+  return (
+    <div className="card" id="timer-card">
+      <div className="card-head"><h2>Bot timer</h2>
+        {info && (healthy ? <span className="badge" style={{ background: "var(--pos)", color: "#fff" }}>running</span>
+          : <span className="badge live">not running</span>)}</div>
+      {error && <div className="alert error" style={{ margin: 0 }}>{error}</div>}
+      {info && <>
+        <p className="small" style={{ marginTop: 0 }}>{healthy
+          ? <>Your bots are checked every minute. Last check: <b>{ago(info.last_run)}</b>.</>
+          : <>Bots only trade when something wakes this website every minute. {lastMs ? <>Last check was <b>{ago(info.last_run)}</b>.</> : "It hasn't run yet."} Set up the free timer:</>}</p>
+        {!healthy && <ol className="small" style={{ paddingLeft: 18 }}>
+          <li>Make a free account at <a href="https://cron-job.org/en/signup/" target="_blank" rel="noopener">cron-job.org ↗</a>.</li>
+          <li>Click <b>Create cronjob</b>. Title: <i>TrendBot</i>. URL: paste the link below. Schedule: <b>Every minute</b>. Save.</li>
+          <li>Come back here in a couple of minutes. This card turns green.</li>
+        </ol>}
+        {info.url ? <div className="btn-row" style={{ alignItems: "center" }}>
+          <input readOnly value={info.url} onFocus={e => e.target.select()} style={{ flex: 1, minWidth: 220 }} className="mono" />
+          <button className="btn sm" onClick={copy}>Copy link</button>
+        </div> : <div className="alert warn" style={{ margin: 0 }}>CRON_SECRET isn't set on the server yet.</div>}
+        <p className="muted small" style={{ marginBottom: 0 }}>Keep this link private: it lets the timer run your bots' checks (it can't read or change anything else).</p>
+      </>}
+    </div>
+  );
+}
+
 export function SetupPage() {
   const { meta } = useApp();
   return (
     <>
       <div className="page-head"><div className="grow"><h1>Setup &amp; safety</h1>
-        <div className="muted small">Everything runs on your own computer. Connected keys are stored only there and are never shown in this app.</div></div></div>
+        <div className="muted small">{meta.cloud
+          ? "Everything runs on this website. Connected keys are stored encrypted and are never shown again."
+          : "Everything runs on your own computer. Connected keys are stored only there and are never shown in this app."}</div></div></div>
+
+      {meta.cloud && <TimerCard />}
 
       <div className="card">
         <h2>Your exchange accounts</h2>
@@ -189,7 +231,17 @@ export function SetupPage() {
         <p className="muted small">Advanced: keys can also go in the <code>.env</code> file (see <code>.env.example</code>). Those take priority over connected accounts.</p>
       </div>
 
-      <div className="card prose">
+      {meta.cloud ? (
+        <div className="card prose">
+          <h2>Using it on your phone</h2>
+          <ul>
+            <li>This website works on any device. Open it on your phone, log in, then use <b>Share → Add to Home Screen</b> (iPhone)
+              or <b>⋮ → Add to Home screen</b> (Android) to get an app icon.</li>
+            <li>Your bots keep running when every device is off, as long as the Bot timer above is green.</li>
+            <li>Log in only on your own devices, and keep your password and timer link private.</li>
+          </ul>
+        </div>
+      ) : <div className="card prose">
         <h2>Keeping it running &amp; using it on your phone</h2>
         <ul>
           <li>The bot only trades while TrendBot is running and the computer is awake. Set Windows to never sleep while plugged in
@@ -201,7 +253,7 @@ export function SetupPage() {
           <li>Never expose TrendBot to the open internet (no port forwarding). It's meant for your home network.</li>
         </ul>
         <p className="muted small">You're currently connected to <code>{location.host}</code>.</p>
-      </div>
+      </div>}
 
       <div className="card prose">
         <h2>Important: what this bot can and can't do</h2>

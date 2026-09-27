@@ -1,18 +1,23 @@
 """Paths, constants and API-key lookup.
 
-Keys come from the environment / .env, or from accounts connected in the app (stored in
-data/accounts.json on this computer only). Their values are never sent back to the browser.
+Keys come from the environment / .env, or from accounts connected in the app: stored in
+data/accounts.json on your PC, or encrypted in the cloud database on the website. Their values are
+never sent back to the browser.
 """
 import json
 import os
 import threading
+import time
 from pathlib import Path
+
+from .store import CLOUD, decrypt, encrypt, store
 
 ROOT = Path(__file__).resolve().parent.parent
 
-# Vercel (and TRENDBOT_BACKTEST_ONLY=1) run a public, backtest-only site: serverless hosts can't keep
-# bots running or store their state, so bots and exchange accounts live in the PC app only.
-BACKTEST_ONLY = bool(os.environ.get("VERCEL") or os.environ.get("TRENDBOT_BACKTEST_ONLY"))
+# On Vercel with a cloud database (store.CLOUD) the website is the full app: bots are stored in the
+# database and a scheduler calls /api/cron/tick every minute. Without a database the website can only
+# backtest (TRENDBOT_BACKTEST_ONLY=1 forces that anywhere).
+BACKTEST_ONLY = bool(os.environ.get("TRENDBOT_BACKTEST_ONLY") or (os.environ.get("VERCEL") and not CLOUD))
 
 # Cloud hosts point this at a persistent disk; locally it is the data/ folder.
 # Vercel's filesystem is read-only except /tmp.
@@ -51,17 +56,36 @@ ACCOUNTS_FILE = DATA_DIR / "accounts.json"
 _accounts_lock = threading.Lock()
 
 
+_cloud_cache: tuple[float, dict] = (0.0, {})
+
+
 def _load_accounts() -> dict:
+    global _cloud_cache
+    if CLOUD:  # {"exchange": {"mode": "<encrypted json>"}}, cached briefly to save database calls
+        if time.time() - _cloud_cache[0] > 20:
+            raw = store.get_json("accounts", {})
+            _cloud_cache = (time.time(), {ex: {m: json.loads(decrypt(v)) for m, v in modes.items()}
+                                          for ex, modes in raw.items()})
+        return json.loads(json.dumps(_cloud_cache[1]))
     try:
         return json.loads(ACCOUNTS_FILE.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return {}
 
 
+def _save_cloud_accounts(data: dict) -> None:
+    global _cloud_cache
+    store.set_json("accounts", {ex: {m: encrypt(json.dumps(v)) for m, v in modes.items()} for ex, modes in data.items()})
+    _cloud_cache = (time.time(), data)
+
+
 def save_account(exchange: str, mode: str, key: str, secret: str) -> None:
     """Remember keys connected in the app. Owner-only file permissions where the OS supports it."""
     with _accounts_lock:
         data = _load_accounts()
+        if CLOUD:
+            data.setdefault(exchange, {})[mode] = {"api_key": key, "api_secret": secret}
+            return _save_cloud_accounts(data)
         data.setdefault(exchange, {})[mode] = {"api_key": key, "api_secret": secret}
         DATA_DIR.mkdir(parents=True, exist_ok=True)
         tmp = ACCOUNTS_FILE.with_suffix(".tmp")
@@ -77,6 +101,8 @@ def remove_account(exchange: str, mode: str) -> None:
     with _accounts_lock:
         data = _load_accounts()
         if data.get(exchange, {}).pop(mode, None) is not None:
+            if CLOUD:
+                return _save_cloud_accounts(data)
             ACCOUNTS_FILE.write_text(json.dumps(data, indent=1), encoding="utf-8")
 
 

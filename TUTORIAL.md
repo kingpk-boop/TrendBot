@@ -14,6 +14,12 @@ TrendBot comes in two parts:
 
 ---
 
+## 0. Or use only the website
+
+If the website's database and timer are set up (see "Run everything from the website" in README.md), you
+can skip the PC completely: open the website, create your password with the setup code, and follow
+steps 2-5 there. Check that **Setup → Bot timer** is green, so your bots are checked every minute.
+
 ## 1. Start the PC app
 
 1. Open the `Documents\TrendBot` folder.

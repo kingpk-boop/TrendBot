@@ -1,5 +1,6 @@
 """HTTP API + static web app."""
 import asyncio
+import functools
 import hashlib
 import hmac
 import json
@@ -20,16 +21,24 @@ from . import ai
 from .config import (BACKTEST_ONLY, DATA_DIR, EXCHANGES, MODES, POLL_SECONDS, TIMEFRAMES, WEB_DIR, api_keys, key_source,
                      keys_status, load_dotenv, remove_account, save_account)
 from .engine import BotManager, BotNotFound
+from .store import CLOUD, StoreError, store
 from .exchanges import ALPACA_BARS_PER_DAY, MarketError, make_market, verify_account
 from .strategy import Params, backtest, compute, entry_signal, warmup_bars
 
 load_dotenv()
 PASSWORD = os.environ.get("BOT_UI_PASSWORD", "")
+SETUP_CODE = os.environ.get("TRENDBOT_SETUP_CODE", "")  # website: needed once, to create the password
+CRON_SECRET = os.environ.get("CRON_SECRET", "")          # website: authorizes the minute-by-minute check
 LOCAL_HOSTS = {"localhost", "127.0.0.1", "[::1]", "::1"}
+OPEN_PATHS = ("/api/login", "/api/meta", "/api/setup")
 manager = BotManager()
 
 
+# ---------------------------------------------------------------------------- login
+
 def _secret() -> bytes:
+    if CLOUD:
+        return os.environ.get("TRENDBOT_SECRET", "").encode()
     path = DATA_DIR / ".ui_secret"
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     if not path.exists():
@@ -37,7 +46,56 @@ def _secret() -> bytes:
     return path.read_text(encoding="utf-8").strip().encode()
 
 
-AUTH_TOKEN = hmac.new(_secret(), PASSWORD.encode(), hashlib.sha256).hexdigest() if PASSWORD else ""
+_password_cache: tuple[float, dict | None] = (0.0, None)
+
+
+def _password_record() -> dict | None:
+    """Website only: the password hash created on first visit, cached briefly."""
+    global _password_cache
+    if not CLOUD:
+        return None
+    if time.time() - _password_cache[0] > 30:
+        _password_cache = (time.time(), store.get_json("auth"))
+    return _password_cache[1]
+
+
+def _hash_password(password: str, salt: str) -> str:
+    return hashlib.pbkdf2_hmac("sha256", password.encode(), bytes.fromhex(salt), 200_000).hex()
+
+
+def auth_token() -> str:
+    """Cookie value that proves a login; empty when no password is configured."""
+    if PASSWORD:
+        return hmac.new(_secret(), PASSWORD.encode(), hashlib.sha256).hexdigest()
+    rec = _password_record()
+    return hmac.new(_secret(), rec["hash"].encode(), hashlib.sha256).hexdigest() if rec else ""
+
+
+def needs_setup() -> bool:
+    return CLOUD and not PASSWORD and _password_record() is None
+
+
+def _logged_in(request: Request) -> bool:
+    token = auth_token()
+    return not token or hmac.compare_digest(request.cookies.get("tb_auth", ""), token)
+
+
+def _auth_response(request: Request) -> JSONResponse:
+    resp = JSONResponse({"ok": True})
+    https = request.url.scheme == "https" or request.headers.get("x-forwarded-proto") == "https"
+    resp.set_cookie("tb_auth", auth_token(), max_age=30 * 86400, httponly=True, samesite="strict", secure=https)
+    return resp
+
+
+def managed(write: bool = False):
+    """Run a route inside a bot session (on the website: load bots fresh; save and lock for changes)."""
+    def deco(fn):
+        @functools.wraps(fn)
+        def wrapper(*args, **kwargs):
+            with manager.session(write=write):
+                return fn(*args, **kwargs)
+        return wrapper
+    return deco
 
 
 @asynccontextmanager
@@ -54,18 +112,23 @@ app = FastAPI(title="TrendBot", lifespan=lifespan, docs_url=None, redoc_url=None
 @app.middleware("http")
 async def guard(request: Request, call_next):
     path = request.url.path
-    if path.startswith("/api/"):
+    if path.startswith("/api/") and path != "/api/cron/tick":  # the scheduler authenticates with CRON_SECRET
         if BACKTEST_ONLY and path.startswith(("/api/bots", "/api/accounts", "/api/ai")):
             return JSONResponse({"detail": "This online version only runs backtests. Bots and exchange accounts "
                                            "live in TrendBot on your PC."}, 403)
+        try:
+            token, setup = await asyncio.to_thread(lambda: (auth_token(), needs_setup()))
+        except (StoreError, OSError) as exc:
+            return JSONResponse({"detail": f"The database isn't reachable right now. ({exc})"}, 503)
         host = (request.headers.get("host") or "").rsplit(":", 1)[0].lower()
         # The backtest-only site holds nothing private, so it may be public without a password.
-        if not PASSWORD and not BACKTEST_ONLY and host not in LOCAL_HOSTS:
+        if not token and not BACKTEST_ONLY and not CLOUD and host not in LOCAL_HOSTS:
             return JSONResponse({"detail": "Set BOT_UI_PASSWORD to use the app from another device."}, 403)
         if request.method != "GET" and request.headers.get("x-trendbot") != "1":
             return JSONResponse({"detail": "Missing app header."}, 403)  # blocks cross-site form posts
-        if PASSWORD and path not in ("/api/login", "/api/meta") and \
-                not hmac.compare_digest(request.cookies.get("tb_auth", ""), AUTH_TOKEN):
+        if setup and path not in OPEN_PATHS:
+            return JSONResponse({"detail": "Create your password first."}, 401)
+        if token and path not in OPEN_PATHS and not hmac.compare_digest(request.cookies.get("tb_auth", ""), token):
             return JSONResponse({"detail": "Login required."}, 401)
     return await call_next(request)
 
@@ -90,6 +153,11 @@ async def exchange_error(_req, exc: ccxt.BaseError):
 @app.exception_handler(ai.AIError)
 async def ai_error(_req, exc: ai.AIError):
     return JSONResponse({"detail": str(exc)}, 400)
+
+
+@app.exception_handler(StoreError)
+async def store_error(_req, exc: StoreError):
+    return JSONResponse({"detail": str(exc)}, 503)
 
 
 @app.exception_handler(BotNotFound)
@@ -153,6 +221,11 @@ class LoginIn(BaseModel):
     password: str
 
 
+class SetupIn(BaseModel):
+    code: str
+    password: str = Field(min_length=10, max_length=200)
+
+
 class AccountIn(BaseModel):
     api_key: str = Field(min_length=8, max_length=200)
     api_secret: str = Field(min_length=8, max_length=300)
@@ -170,58 +243,108 @@ def meta(request: Request):
     return {
         "exchanges": EXCHANGES, "timeframes": list(TIMEFRAMES), "modes": list(MODES),
         "keys": keys_status(), "poll_seconds": POLL_SECONDS,
-        "auth_required": bool(PASSWORD), "backtest_only": BACKTEST_ONLY,
+        "auth_required": bool(auth_token()), "backtest_only": BACKTEST_ONLY, "cloud": CLOUD,
+        "needs_setup": needs_setup(),
         "ai": {"source": None, "model": ai.MODEL} if BACKTEST_ONLY else ai.ai_status(),
         "scan_symbols": SCAN_SYMBOLS,
-        "logged_in": not PASSWORD or hmac.compare_digest(request.cookies.get("tb_auth", ""), AUTH_TOKEN),
+        "logged_in": _logged_in(request) and not needs_setup(),
         "defaults": BotConfigIn().to_config(),
     }
 
 
+def _password_ok(password: str) -> bool:
+    if PASSWORD:
+        return hmac.compare_digest(password, PASSWORD)
+    rec = _password_record()
+    return bool(rec) and hmac.compare_digest(_hash_password(password, rec["salt"]), rec["hash"])
+
+
 @app.post("/api/login")
-async def login(body: LoginIn):
-    if not PASSWORD or not hmac.compare_digest(body.password, PASSWORD):
+async def login(body: LoginIn, request: Request):
+    if not await asyncio.to_thread(_password_ok, body.password):
         await asyncio.sleep(1.5)  # slow down guessing
         raise HTTPException(401, "Wrong password.")
-    resp = JSONResponse({"ok": True})
-    resp.set_cookie("tb_auth", AUTH_TOKEN, max_age=30 * 86400, httponly=True, samesite="strict")
-    return resp
+    return _auth_response(request)
+
+
+@app.post("/api/setup")
+async def setup(body: SetupIn, request: Request):
+    """Website, first visit only: create the login password. Needs the one-time setup code."""
+    global _password_cache
+    if not await asyncio.to_thread(needs_setup):
+        raise HTTPException(400, "A password already exists. Log in instead.")
+    if not SETUP_CODE or not hmac.compare_digest(body.code.strip(), SETUP_CODE):
+        await asyncio.sleep(1.5)
+        raise HTTPException(401, "That setup code isn't right.")
+    salt = secrets.token_hex(16)
+    rec = {"salt": salt, "hash": _hash_password(body.password, salt), "created": time.time()}
+    await asyncio.to_thread(store.set_json, "auth", rec)
+    _password_cache = (time.time(), rec)
+    return _auth_response(request)
+
+
+@app.api_route("/api/cron/tick", methods=["GET", "POST"])
+def cron_tick(request: Request, key: str = ""):
+    """Website only: the scheduler (cron-job.org, Vercel Cron...) calls this once a minute."""
+    if not CLOUD:
+        raise HTTPException(404, "Only used by the website version.")
+    supplied = key or request.headers.get("authorization", "").removeprefix("Bearer ").strip()
+    if not CRON_SECRET or not hmac.compare_digest(supplied, CRON_SECRET):
+        raise HTTPException(401, "Wrong or missing key.")
+    return manager.cron_tick()
+
+
+@app.get("/api/cron/info")
+def cron_info(request: Request):
+    """For the logged-in owner: the scheduler URL to paste into cron-job.org, and when it last ran."""
+    if not CLOUD:
+        raise HTTPException(404, "Only used by the website version.")
+    host = request.headers.get("x-forwarded-host") or request.headers.get("host") or ""
+    return {"url": f"https://{host}/api/cron/tick?key={CRON_SECRET}" if CRON_SECRET else None,
+            "last_run": store.cmd("GET", "trendbot:cron_last")}
 
 
 @app.get("/api/bots")
+@managed()
 def list_bots():
     return manager.list()
 
 
 @app.post("/api/bots")
+@managed(write=True)
 def create_bot(body: BotConfigIn):
     _require_live_confirmation(body, None)
     return manager.create(body.to_config()).summary()
 
 
 @app.get("/api/bots/{bot_id}")
+@managed()
 def get_bot(bot_id: str):
     return manager.get(bot_id).detail()
 
 
 @app.put("/api/bots/{bot_id}")
+@managed(write=True)
 def update_bot(bot_id: str, body: BotConfigIn):
     _require_live_confirmation(body, manager.get(bot_id).config["mode"])
     return manager.update(bot_id, body.to_config()).summary()
 
 
 @app.delete("/api/bots/{bot_id}")
+@managed(write=True)
 def delete_bot(bot_id: str):
     manager.delete(bot_id)
     return {"ok": True}
 
 
 @app.post("/api/bots/{bot_id}/start")
+@managed(write=True)
 def start_bot(bot_id: str):
     return manager.start(bot_id).summary()
 
 
 @app.post("/api/bots/{bot_id}/stop")
+@managed(write=True)
 def stop_bot(bot_id: str):
     bot = manager.get(bot_id)
     bot.stop()
@@ -229,6 +352,7 @@ def stop_bot(bot_id: str):
 
 
 @app.post("/api/bots/{bot_id}/close")
+@managed(write=True)
 def close_position(bot_id: str):
     bot = manager.get(bot_id)
     bot.close_now()
@@ -236,6 +360,7 @@ def close_position(bot_id: str):
 
 
 @app.get("/api/bots/{bot_id}/chart")
+@managed()
 def bot_chart(bot_id: str):
     return manager.get(bot_id).chart()
 
@@ -252,6 +377,7 @@ def _bots_blocking(exchange: str, mode: str) -> list[str]:
 
 
 @app.post("/api/accounts/{exchange}/{mode}")
+@managed()
 def connect_account(exchange: str, mode: str, body: AccountIn, request: Request):
     _account_target(exchange, mode)
     _require_secure(request)
@@ -280,6 +406,7 @@ def account_balance(exchange: str, mode: str):
 
 
 @app.delete("/api/accounts/{exchange}/{mode}")
+@managed()
 def disconnect_account(exchange: str, mode: str):
     _account_target(exchange, mode)
     if key_source(exchange, mode) == "env":
@@ -455,6 +582,7 @@ def _trim_for_ai(kind: str, data: dict) -> dict:
 
 
 @app.post("/api/ai/analyze")
+@managed()
 def ai_analyze(body: AnalyzeIn):
     if body.kind == "bot":
         if not body.bot_id:
