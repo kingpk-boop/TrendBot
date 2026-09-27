@@ -1,16 +1,55 @@
 /* App shell: header, hash routing, login, and the shared context every page reads. */
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, setUnauthorizedHandler } from "./api.js";
 import { BacktestPage } from "./pages/Backtest.jsx";
 import { BotPage, BotsPage, OnlineBots } from "./pages/Bots.jsx";
 import { MarketsPage } from "./pages/Markets.jsx";
 import { SetupPage } from "./pages/Setup.jsx";
-import { AppContext, setPollFloor, Spinner, useHash, useModalHost, useToasts } from "./ui.jsx";
+import { AppContext, setPollFloor, Spinner, useApp, useHash, useModalHost, useToasts } from "./ui.jsx";
+
+/** "Sign in with Google" using Google Identity Services; the server checks the account is allowed. */
+function GoogleButton({ clientId, onDone, onError }) {
+  const el = useRef(null);
+  useEffect(() => {
+    let cancelled = false;
+    const render = () => {
+      if (cancelled || !window.google?.accounts?.id || !el.current) return;
+      window.google.accounts.id.initialize({
+        client_id: clientId,
+        callback: async ({ credential }) => {
+          try {
+            await api("/login/google", { method: "POST", body: { credential } });
+            onDone();
+          } catch (err) { onError(err.message); }
+        },
+      });
+      window.google.accounts.id.renderButton(el.current, { theme: "outline", size: "large", shape: "pill", text: "signin_with", width: 280 });
+    };
+    if (window.google?.accounts?.id) render();
+    else {
+      let tag = document.getElementById("gsi-script");
+      if (!tag) {
+        tag = document.createElement("script");
+        tag.id = "gsi-script";
+        tag.src = "https://accounts.google.com/gsi/client";
+        tag.async = true;
+        document.head.append(tag);
+      }
+      tag.addEventListener("load", render);
+      tag.addEventListener("error", () => onError("Couldn't load Google sign-in. Check your connection."));
+    }
+    return () => { cancelled = true; };
+  }, [clientId, onDone, onError]);
+  return <div ref={el} id="google-button" style={{ display: "flex", justifyContent: "center", minHeight: 44 }} />;
+}
 
 function Login({ onDone }) {
+  const { meta } = useApp();
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const google = meta.google_client_id;
+  const showPassword = !google || meta.password_login;
   const submit = async e => {
     e.preventDefault();
     setBusy(true);
@@ -25,13 +64,18 @@ function Login({ onDone }) {
   return (
     <div className="card login">
       <h2>Log in</h2>
-      <p className="muted small">This TrendBot is protected with the password set in <code>BOT_UI_PASSWORD</code>.</p>
-      <form id="login-form" onSubmit={submit}>
-        <label className="field">Password <input type="password" name="password" autoComplete="current-password" required autoFocus
+      {google && <>
+        <p className="muted small">This TrendBot is private. Sign in with the Google account it belongs to.</p>
+        <GoogleButton clientId={google} onDone={onDone} onError={setError} />
+      </>}
+      {google && showPassword && <p className="muted small" style={{ textAlign: "center", margin: "14px 0 6px" }}>or use your password</p>}
+      {showPassword && <form id="login-form" onSubmit={submit}>
+        {!google && <p className="muted small">Enter your TrendBot password.</p>}
+        <label className="field">Password <input type="password" name="password" autoComplete="current-password" required autoFocus={!google}
           value={password} onChange={e => setPassword(e.target.value)} /></label>
-        {error && <div className="alert error" id="login-err" style={{ marginTop: 12 }}>{error}</div>}
         <div style={{ marginTop: 14 }}><button className="btn primary" type="submit" disabled={busy} style={{ width: "100%" }}>Log in</button></div>
-      </form>
+      </form>}
+      {error && <div className="alert error" id="login-err" style={{ marginTop: 12 }}>{error}</div>}
     </div>
   );
 }

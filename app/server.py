@@ -12,6 +12,7 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 
 import ccxt
+import requests
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -29,8 +30,12 @@ load_dotenv()
 PASSWORD = os.environ.get("BOT_UI_PASSWORD", "")
 SETUP_CODE = os.environ.get("TRENDBOT_SETUP_CODE", "")  # website: needed once, to create the password
 CRON_SECRET = os.environ.get("CRON_SECRET", "")          # website: authorizes the minute-by-minute check
+# "Sign in with Google": the OAuth client ID of your Google Cloud project, and the only accounts allowed in.
+GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID", "").strip()
+ALLOWED_EMAILS = {e.strip().lower() for e in os.environ.get("ALLOWED_EMAILS", "").split(",") if e.strip()}
+GOOGLE_LOGIN = bool(GOOGLE_CLIENT_ID and ALLOWED_EMAILS)
 LOCAL_HOSTS = {"localhost", "127.0.0.1", "[::1]", "::1"}
-OPEN_PATHS = ("/api/login", "/api/meta", "/api/setup")
+OPEN_PATHS = ("/api/login", "/api/login/google", "/api/meta", "/api/setup")
 manager = BotManager()
 
 
@@ -63,27 +68,43 @@ def _hash_password(password: str, salt: str) -> str:
     return hashlib.pbkdf2_hmac("sha256", password.encode(), bytes.fromhex(salt), 200_000).hex()
 
 
-def auth_token() -> str:
-    """Cookie value that proves a login; empty when no password is configured."""
+def _sign(value: str) -> str:
+    return hmac.new(_secret(), value.encode(), hashlib.sha256).hexdigest()
+
+
+def _password_token() -> str:
     if PASSWORD:
-        return hmac.new(_secret(), PASSWORD.encode(), hashlib.sha256).hexdigest()
+        return _sign(PASSWORD)
     rec = _password_record()
-    return hmac.new(_secret(), rec["hash"].encode(), hashlib.sha256).hexdigest() if rec else ""
+    return _sign(rec["hash"]) if rec else ""
+
+
+def valid_tokens() -> list[str]:
+    """Cookie values that prove a login. Empty list = no login configured (PC app on localhost)."""
+    tokens = [_sign("google:" + email) for email in sorted(ALLOWED_EMAILS)] if GOOGLE_LOGIN else []
+    pw = _password_token()
+    return tokens + ([pw] if pw else [])
 
 
 def needs_setup() -> bool:
-    return CLOUD and not PASSWORD and _password_record() is None
+    """Website without Google sign-in: the password must be created on first visit."""
+    return CLOUD and not GOOGLE_LOGIN and not PASSWORD and _password_record() is None
+
+
+def _cookie_ok(request: Request, tokens: list[str]) -> bool:
+    cookie = request.cookies.get("tb_auth", "")
+    return any(hmac.compare_digest(cookie, t) for t in tokens)
 
 
 def _logged_in(request: Request) -> bool:
-    token = auth_token()
-    return not token or hmac.compare_digest(request.cookies.get("tb_auth", ""), token)
+    tokens = valid_tokens()
+    return not tokens or _cookie_ok(request, tokens)
 
 
-def _auth_response(request: Request) -> JSONResponse:
+def _auth_response(request: Request, token: str) -> JSONResponse:
     resp = JSONResponse({"ok": True})
     https = request.url.scheme == "https" or request.headers.get("x-forwarded-proto") == "https"
-    resp.set_cookie("tb_auth", auth_token(), max_age=30 * 86400, httponly=True, samesite="strict", secure=https)
+    resp.set_cookie("tb_auth", token, max_age=30 * 86400, httponly=True, samesite="strict", secure=https)
     return resp
 
 
@@ -117,18 +138,18 @@ async def guard(request: Request, call_next):
             return JSONResponse({"detail": "This online version only runs backtests. Bots and exchange accounts "
                                            "live in TrendBot on your PC."}, 403)
         try:
-            token, setup = await asyncio.to_thread(lambda: (auth_token(), needs_setup()))
+            tokens, setup = await asyncio.to_thread(lambda: (valid_tokens(), needs_setup()))
         except (StoreError, OSError) as exc:
             return JSONResponse({"detail": f"The database isn't reachable right now. ({exc})"}, 503)
         host = (request.headers.get("host") or "").rsplit(":", 1)[0].lower()
         # The backtest-only site holds nothing private, so it may be public without a password.
-        if not token and not BACKTEST_ONLY and not CLOUD and host not in LOCAL_HOSTS:
+        if not tokens and not BACKTEST_ONLY and not CLOUD and host not in LOCAL_HOSTS:
             return JSONResponse({"detail": "Set BOT_UI_PASSWORD to use the app from another device."}, 403)
         if request.method != "GET" and request.headers.get("x-trendbot") != "1":
             return JSONResponse({"detail": "Missing app header."}, 403)  # blocks cross-site form posts
         if setup and path not in OPEN_PATHS:
             return JSONResponse({"detail": "Create your password first."}, 401)
-        if token and path not in OPEN_PATHS and not hmac.compare_digest(request.cookies.get("tb_auth", ""), token):
+        if tokens and path not in OPEN_PATHS and not _cookie_ok(request, tokens):
             return JSONResponse({"detail": "Login required."}, 401)
     return await call_next(request)
 
@@ -243,7 +264,9 @@ def meta(request: Request):
     return {
         "exchanges": EXCHANGES, "timeframes": list(TIMEFRAMES), "modes": list(MODES),
         "keys": keys_status(), "poll_seconds": POLL_SECONDS,
-        "auth_required": bool(auth_token()), "backtest_only": BACKTEST_ONLY, "cloud": CLOUD,
+        "auth_required": bool(valid_tokens()), "backtest_only": BACKTEST_ONLY, "cloud": CLOUD,
+        "google_client_id": GOOGLE_CLIENT_ID if GOOGLE_LOGIN and not BACKTEST_ONLY else None,
+        "password_login": bool(_password_token()),
         "needs_setup": needs_setup(),
         "ai": {"source": None, "model": ai.MODEL} if BACKTEST_ONLY else ai.ai_status(),
         "scan_symbols": SCAN_SYMBOLS,
@@ -264,13 +287,43 @@ async def login(body: LoginIn, request: Request):
     if not await asyncio.to_thread(_password_ok, body.password):
         await asyncio.sleep(1.5)  # slow down guessing
         raise HTTPException(401, "Wrong password.")
-    return _auth_response(request)
+    return _auth_response(request, await asyncio.to_thread(_password_token))
+
+
+class GoogleLoginIn(BaseModel):
+    credential: str = Field(min_length=20, max_length=5000)
+
+
+def _verify_google(credential: str) -> str:
+    """Check a Google ID token with Google and return the signed-in email if it's allowed."""
+    try:
+        r = requests.get("https://oauth2.googleapis.com/tokeninfo", params={"id_token": credential}, timeout=15)
+    except requests.RequestException:
+        raise HTTPException(502, "Couldn't reach Google. Try again.")
+    info = r.json() if r.status_code == 200 else {}
+    email = str(info.get("email", "")).lower()
+    if (info.get("aud") != GOOGLE_CLIENT_ID or info.get("iss") not in ("accounts.google.com", "https://accounts.google.com")
+            or str(info.get("email_verified")).lower() != "true" or int(info.get("exp", 0)) < time.time()):
+        raise HTTPException(401, "Google sign-in failed. Try again.")
+    if email not in ALLOWED_EMAILS:
+        raise HTTPException(403, f"{email} isn't allowed to use this TrendBot.")
+    return email
+
+
+@app.post("/api/login/google")
+async def login_google(body: GoogleLoginIn, request: Request):
+    if not GOOGLE_LOGIN:
+        raise HTTPException(404, "Google sign-in isn't set up on this server.")
+    email = await asyncio.to_thread(_verify_google, body.credential)
+    return _auth_response(request, _sign("google:" + email))
 
 
 @app.post("/api/setup")
 async def setup(body: SetupIn, request: Request):
     """Website, first visit only: create the login password. Needs the one-time setup code."""
     global _password_cache
+    if GOOGLE_LOGIN:
+        raise HTTPException(400, "This TrendBot uses Google sign-in. Sign in with your Google account instead.")
     if not await asyncio.to_thread(needs_setup):
         raise HTTPException(400, "A password already exists. Log in instead.")
     if not SETUP_CODE or not hmac.compare_digest(body.code.strip(), SETUP_CODE):
@@ -280,7 +333,7 @@ async def setup(body: SetupIn, request: Request):
     rec = {"salt": salt, "hash": _hash_password(body.password, salt), "created": time.time()}
     await asyncio.to_thread(store.set_json, "auth", rec)
     _password_cache = (time.time(), rec)
-    return _auth_response(request)
+    return _auth_response(request, _sign(rec["hash"]))
 
 
 @app.api_route("/api/cron/tick", methods=["GET", "POST"])
