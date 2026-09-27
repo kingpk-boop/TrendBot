@@ -134,6 +134,20 @@ Don't run the same bot on your PC and in the cloud at the same time. They'd trad
 - Your bots and their trade history are stored in the `data` folder (never uploaded).
 - Profits from trading may be taxable where you live. The trades table lists every fill.
 
+## Changing the web app
+
+The web app is written in React (in `frontend/`). The ready-built copy lives in `web/`, so running
+TrendBot never needs Node.js. To change the app, install [Node.js](https://nodejs.org/), then:
+
+```
+cd frontend
+npm install
+npm run dev      # live preview at http://localhost:5173 (start TrendBot too, for the data)
+npm run build    # writes the finished app into ../web
+```
+
+Commit both `frontend/` and `web/`. Pushing to `main` updates the online site automatically.
+
 ## Troubleshooting
 
 | Problem | Fix |
@@ -155,6 +169,7 @@ app/strategy.py    The trading rules and the backtester (same rules for both)
 app/engine.py      Runs each bot once a minute and saves its state in data/bots/
 app/exchanges.py   Binance/Bybit (via ccxt), Alpaca, and the paper-trading simulator
 app/server.py      The web API the page talks to
-web/               The web app (plain HTML, CSS, JavaScript; installable as an app)
+frontend/          The web app's source (React + Vite; installable as an app)
+web/               The built web app the server serves (made by `npm run build` in frontend/)
 tools/             make_icons.py redraws the app icons
 ```

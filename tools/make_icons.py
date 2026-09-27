@@ -1,11 +1,11 @@
-"""Draws web/icons/icon-192.png and icon-512.png (same design as icon.svg) with only the
+"""Draws frontend/public/icons/icon-192.png and icon-512.png (same design as icon.svg) with only the
 standard library, so no image package is needed. Run: py -3 tools/make_icons.py"""
 import math
 import struct
 import zlib
 from pathlib import Path
 
-OUT = Path(__file__).resolve().parent.parent / "web" / "icons"
+OUT = Path(__file__).resolve().parent.parent / "frontend" / "public" / "icons"
 BG = (0x1A, 0x2A, 0x44)
 WHITE = (255, 255, 255)
 ORANGE = (0xEB, 0x68, 0x34)
