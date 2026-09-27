@@ -4,7 +4,7 @@ import { api } from "../api.js";
 import { candleIndex } from "../chart.js";
 import { ago, cls, exchangeLabel, fmtNum, fmtPrice, fmtQty, fmtTime, pct, quoteOf, signed } from "../format.js";
 import { BotForm } from "../forms.jsx";
-import { AIReview, ChartView, Legend, ModeBadge, Spinner, Tile, useApp, usePolling } from "../ui.jsx";
+import { AIReview, ChartView, FinishSetup, Legend, ModeBadge, Spinner, Tile, useApp, usePolling } from "../ui.jsx";
 
 /** Opens the bot form and goes to the saved bot. */
 export function useOpenBotForm() {
@@ -22,17 +22,8 @@ export function OnlineBots() {
   return (
     <>
       <div className="page-head"><div className="grow"><h1>Your bots</h1></div></div>
-      <div className="card empty">
-        <h2>Bots run in TrendBot on your PC</h2>
-        <p>This online version is for <b>backtesting</b> only. Websites like this one shut down between visits,
-          so they can't watch prices around the clock or keep your exchange keys safe.</p>
-        <p>To run bots: on your PC, double-click <code>start.bat</code> in the TrendBot folder and use{" "}
-          <b>http://localhost:8765</b>. Your bots, trades and connected accounts live there.</p>
-        <div className="btn-row" style={{ justifyContent: "center" }}>
-          <a className="btn primary" href="#/backtest">Run a backtest</a>
-          <a className="btn" href="#/setup">How it works</a>
-        </div>
-      </div>
+      <FinishSetup />
+      <p className="muted small">Meanwhile you can already use <a href="#/backtest">Backtest</a> and <a href="#/markets">Markets</a>.</p>
     </>
   );
 }

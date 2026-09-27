@@ -131,8 +131,7 @@ export function BacktestPage() {
 
   return (
     <>
-      {meta.backtest_only && <div className="alert info">You're on the <b>online version</b> of TrendBot: backtests only.
-        To run bots and connect exchange accounts, use TrendBot on your PC (<code>start.bat</code> → http://localhost:8765).</div>}
+      {meta.backtest_only && <div className="alert info">Bots and account linking switch on after one setup step: see <a href="#/setup">Setup</a>.</div>}
       <div className="page-head"><div className="grow"><h1>Backtest</h1>
         <div className="muted small">Replays the exact bot rules on past prices, with fees, and compares the result with simply buying and holding.</div></div></div>
       <div className="card">
