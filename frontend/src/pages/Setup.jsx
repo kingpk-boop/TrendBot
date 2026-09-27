@@ -3,7 +3,7 @@ import { useState } from "react";
 import { api } from "../api.js";
 import { accountName, fmtQty } from "../format.js";
 import { ConnectDialog } from "../forms.jsx";
-import { useApp } from "../ui.jsx";
+import { Modal, useApp } from "../ui.jsx";
 
 const TUTORIAL = "https://github.com/kingpk-boop/TrendBot/blob/main/TUTORIAL.md";
 
@@ -19,6 +19,26 @@ function Balances({ res }) {
   );
 }
 
+/** Shown on the public website, where accounts can't be connected. */
+function ConnectOnPC({ ex, mode, close }) {
+  const { meta } = useApp();
+  return (
+    <Modal onClose={() => close()}>
+      <div className="dlg-head"><h2>Connect {accountName(meta, ex, mode)}</h2></div>
+      <div className="dlg-body">
+        <p>Your bots run in TrendBot on your PC, so that's where you connect exchange accounts. It keeps your keys off the internet.</p>
+        <ol className="small" style={{ paddingLeft: 18 }}>
+          <li>On your PC, open the <b>Documents\TrendBot</b> folder and double-click <b>start.bat</b>.</li>
+          <li>Your browser opens <b>http://localhost:8765</b>. Go to <b>Setup</b>.</li>
+          <li>Press <b>Connect</b> next to {accountName(meta, ex, mode)} and follow the steps there.</li>
+        </ol>
+        <p className="muted small">Don't have TrendBot on your PC yet? See the <a href={TUTORIAL} target="_blank" rel="noopener">tutorial ↗</a>.</p>
+      </div>
+      <div className="dlg-foot"><button className="btn primary" onClick={() => close()}>Got it</button></div>
+    </Modal>
+  );
+}
+
 function AccountRow({ ex, mode }) {
   const { meta, modal, toast, reloadMeta } = useApp();
   const src = meta.keys[ex][mode];
@@ -26,6 +46,7 @@ function AccountRow({ ex, mode }) {
   const title = mode === "live" ? (ex === "alpaca" ? "Live account" : "Real account") : (ex === "alpaca" ? "Paper account" : "Testnet (practice)");
 
   const connect = async () => {
+    if (meta.backtest_only) return modal.open(close => <ConnectOnPC ex={ex} mode={mode} close={close} />);
     const res = await modal.open(close => <ConnectDialog ex={ex} mode={mode} close={close} />);
     if (!res) return;
     toast(`${accountName(meta, ex, mode)} connected.`);
@@ -139,10 +160,9 @@ export function SetupPage() {
 
       <div className="card">
         <h2>Your exchange accounts</h2>
-        {meta.backtest_only ? (
-          <div className="alert info" style={{ margin: 0 }}>For your safety, accounts can only be connected in TrendBot on your PC, never on this
-            public website. Open <code>start.bat</code> on your PC, go to <b>http://localhost:8765</b> → Setup, and connect there.</div>
-        ) : <>
+        {meta.backtest_only && <div className="alert info">You're on the online website. For your safety, Binance, Bybit and Alpaca
+          accounts are connected in <b>TrendBot on your PC</b> (where your bots run), never on this public site. Press Connect below to see how.</div>}
+        <>
           <p className="muted small">Paper trading on Binance or Bybit needs no account at all. Connect an account to trade on the exchange's practice site
             (testnet) or with real money. Stocks need a free Alpaca paper account even for paper trading, because prices come from Alpaca.</p>
           <div className="acct-grid">
@@ -150,7 +170,7 @@ export function SetupPage() {
               <div className="acct-card" key={ex}><h3>{e.label}</h3><AccountRow ex={ex} mode="testnet" /><AccountRow ex={ex} mode="live" /></div>
             ))}
           </div>
-        </>}
+        </>
       </div>
 
       <AICard />
