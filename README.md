@@ -98,12 +98,22 @@ Don't open TrendBot to the internet (no port forwarding on your router).
 
 On the PC you can also install it like an app: in Chrome or Edge, *⋮ → Install TrendBot*.
 
-## The online version (Vercel)
+## Run everything from the website (free)
 
-TrendBot also has a free public website on Vercel for **backtesting from any device**. It's
-deployed automatically from this repository (`index.py` and `vercel.json`). It is backtest-only on
-purpose: Vercel shuts websites down between visits, so it can't watch prices around the clock, and a
-public website is no place for exchange keys. **Bots and connected accounts live in the PC app.**
+The Vercel website can be the whole app: bots, accounts and AI, with no PC needed. It uses two free services:
+
+1. **A free database (Upstash Redis)** to remember your bots and trades. In the Vercel dashboard:
+   *trendbot project → Storage → Create Database → Upstash for Redis → Free → Connect to project*.
+   Then redeploy (*Deployments → ⋯ → Redeploy*). Until a database is connected, the website only backtests.
+2. **A free timer (cron-job.org)** that wakes the site every minute, so bots check prices around the clock.
+   After logging in, the website's **Setup → Bot timer** card shows the exact link to paste and turns green when it works.
+
+On first visit the website asks for a **setup code** (the `TRENDBOT_SETUP_CODE` value in the Vercel project's
+environment variables) and lets you create your password. Exchange and AI keys are stored encrypted with
+`TRENDBOT_SECRET`; don't change that value afterwards, or saved keys can't be read.
+
+Free-plan limits: Upstash's free tier comfortably covers a few bots checked every minute. The website
+polls less often than the PC app to stay inside it.
 
 ## Run it in the cloud 24/7 (optional)
 

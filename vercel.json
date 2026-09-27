@@ -8,5 +8,11 @@
       "maxDuration": 60,
       "excludeFiles": "{frontend/**,tools/**,data/**,.venv/**,*.bat,Dockerfile,render.yaml,README.md,TUTORIAL.md}"
     }
-  }
+  },
+  "crons": [
+    {
+      "path": "/api/cron/tick",
+      "schedule": "7 12 * * *"
+    }
+  ]
 }

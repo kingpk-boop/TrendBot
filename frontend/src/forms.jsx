@@ -218,8 +218,9 @@ export function ConnectDialog({ ex, mode, close }) {
             <label className="field">API key <input name="api_key" value={key} onChange={e => setKey(e.target.value)} autoComplete="off" spellCheck="false" required /></label>
             <label className="field">Secret <input name="api_secret" type="password" value={secret} onChange={e => setSecret(e.target.value)} autoComplete="off" spellCheck="false" required /></label>
           </div>
-          <p className="muted small" style={{ marginTop: 10 }}>TrendBot checks the key with the exchange, then saves it only on this
-            computer (<code>data/accounts.json</code>). It's never shown again and never uploaded anywhere.</p>
+          <p className="muted small" style={{ marginTop: 10 }}>{meta.cloud
+            ? "TrendBot checks the key with the exchange, then saves it encrypted in your private TrendBot database. It's never shown again."
+            : <>TrendBot checks the key with the exchange, then saves it only on this computer (<code>data/accounts.json</code>). It's never shown again and never uploaded anywhere.</>}</p>
         </div>
         {error && <div className="alert error dlg-error" id="acct-err">{error}</div>}
         <div className="dlg-foot">

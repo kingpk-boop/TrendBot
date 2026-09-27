@@ -5,7 +5,7 @@ import { BacktestPage } from "./pages/Backtest.jsx";
 import { BotPage, BotsPage, OnlineBots } from "./pages/Bots.jsx";
 import { MarketsPage } from "./pages/Markets.jsx";
 import { SetupPage } from "./pages/Setup.jsx";
-import { AppContext, Spinner, useHash, useModalHost, useToasts } from "./ui.jsx";
+import { AppContext, setPollFloor, Spinner, useHash, useModalHost, useToasts } from "./ui.jsx";
 
 function Login({ onDone }) {
   const [password, setPassword] = useState("");
@@ -36,6 +36,45 @@ function Login({ onDone }) {
   );
 }
 
+/** Website, first visit: create the login password using the one-time setup code. */
+function FirstSetup({ onDone }) {
+  const [code, setCode] = useState("");
+  const [password, setPassword] = useState("");
+  const [again, setAgain] = useState("");
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+  const submit = async e => {
+    e.preventDefault();
+    if (password !== again) return setError("The two passwords don't match.");
+    if (password.length < 10) return setError("Use at least 10 characters.");
+    setBusy(true);
+    setError("");
+    try {
+      await api("/setup", { method: "POST", body: { code, password } });
+      onDone();
+    } catch (err) {
+      setError(err.message);
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="card login" style={{ maxWidth: 440 }}>
+      <h2>Welcome to TrendBot</h2>
+      <p className="muted small">Create the password that protects your bots and exchange accounts on this website. You'll need the
+        one-time <b>setup code</b> Claude gave you (it's also in your Vercel project settings as <code>TRENDBOT_SETUP_CODE</code>).</p>
+      <form id="setup-form" onSubmit={submit} noValidate>
+        <label className="field">Setup code <input name="code" value={code} onChange={e => setCode(e.target.value)} autoComplete="off" spellCheck="false" required /></label>
+        <label className="field" style={{ marginTop: 10 }}>New password <span className="hint">at least 10 characters; don't reuse one from elsewhere</span>
+          <input name="password" type="password" value={password} onChange={e => setPassword(e.target.value)} autoComplete="new-password" required /></label>
+        <label className="field" style={{ marginTop: 10 }}>Password again
+          <input name="password2" type="password" value={again} onChange={e => setAgain(e.target.value)} autoComplete="new-password" required /></label>
+        {error && <div className="alert error" id="setup-err" style={{ marginTop: 12 }}>{error}</div>}
+        <div style={{ marginTop: 14 }}><button className="btn primary" type="submit" disabled={busy} style={{ width: "100%" }}>Create password</button></div>
+      </form>
+    </div>
+  );
+}
+
 function currentTheme() {
   return document.documentElement.dataset.theme || (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
 }
@@ -55,7 +94,12 @@ export default function App() {
   const hash = useHash();
 
   const reloadMeta = useCallback(async () => {
-    try { setMeta(await api("/meta")); setMetaError(""); } catch (e) { setMetaError(e.message); }
+    try {
+      const m = await api("/meta");
+      setPollFloor(m.cloud ? 30000 : 0);
+      setMeta(m);
+      setMetaError("");
+    } catch (e) { setMetaError(e.message); }
   }, []);
   useEffect(() => {
     reloadMeta();
@@ -72,6 +116,7 @@ export default function App() {
   if (!meta) page = metaError
     ? <div className="card"><div className="alert error">{metaError}</div><button className="btn" onClick={reloadMeta}>Try again</button></div>
     : <Spinner>Loading…</Spinner>;
+  else if (meta.needs_setup) page = <FirstSetup onDone={reloadMeta} />;
   else if (!meta.logged_in) page = <Login onDone={reloadMeta} />;
   else if (tab === "backtest") page = <BacktestPage />;
   else if (tab === "markets") page = <MarketsPage />;

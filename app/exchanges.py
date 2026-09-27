@@ -46,11 +46,29 @@ def _missing_keys_error(exchange: str, mode: str) -> MarketError:
 
 # --------------------------------------------------------------------------- crypto (ccxt)
 
+# Public market-data endpoints. Reading price and candles directly is far lighter than ccxt, which
+# downloads the exchange's whole market list first - that matters when checks run once a minute on a
+# serverless host. ccxt is still used for orders and as the fallback.
+PUBLIC_API = {
+    ("binance", False): "https://api.binance.com", ("binance", True): "https://testnet.binance.vision",
+    ("bybit", False): "https://api.bybit.com", ("bybit", True): "https://api-testnet.bybit.com",
+}
+BYBIT_INTERVAL = {"1h": "60", "4h": "240", "1d": "D"}
+_http = requests.Session()
+
+
+def _public_get(url: str, **params):
+    r = _http.get(url, params=params, timeout=15)
+    r.raise_for_status()
+    return r.json()
+
+
 class CcxtMarket:
     kind = "crypto"
 
     def __init__(self, exchange: str, mode: str):
         self.exchange_id = exchange
+        self.public = PUBLIC_API[(exchange, mode == "testnet")]
         opts = {"enableRateLimit": True, "options": {"defaultType": "spot"}}
         if mode in ("testnet", "live"):
             key, secret = api_keys(exchange, mode)
@@ -88,7 +106,33 @@ class CcxtMarket:
         if min_cost and trade_size < min_cost:
             raise MarketError(f"Trade size must be at least {min_cost} {m['quote']} on this market.")
 
+    def _fast_price(self, symbol: str) -> float:
+        market_id = symbol.replace("/", "")
+        if self.exchange_id == "binance":
+            return float(_public_get(self.public + "/api/v3/ticker/price", symbol=market_id)["price"])
+        d = _public_get(self.public + "/v5/market/tickers", category="spot", symbol=market_id)
+        return float(d["result"]["list"][0]["lastPrice"])
+
+    def _fast_candles(self, symbol: str, timeframe: str, limit: int) -> list:
+        market_id = symbol.replace("/", "")
+        if self.exchange_id == "binance":
+            rows = _public_get(self.public + "/api/v3/klines", symbol=market_id, interval=timeframe, limit=min(limit, 1000))
+        else:
+            d = _public_get(self.public + "/v5/market/kline", category="spot", symbol=market_id,
+                            interval=BYBIT_INTERVAL[timeframe], limit=min(limit, 1000))
+            rows = list(reversed(d["result"]["list"]))  # Bybit sends newest first
+        out = [[int(r[0]), float(r[1]), float(r[2]), float(r[3]), float(r[4]), float(r[5])] for r in rows]
+        if not out:
+            raise ValueError("no candles")
+        return out
+
     def last_price(self, symbol: str) -> float:
+        try:
+            price = self._fast_price(symbol)
+            if price > 0:
+                return price
+        except Exception:
+            pass  # fall back to ccxt
         t = self.ex.fetch_ticker(symbol)
         price = t.get("last") or t.get("close")
         if not price:
@@ -96,7 +140,10 @@ class CcxtMarket:
         return float(price)
 
     def fetch_candles(self, symbol: str, timeframe: str, limit: int = 300) -> list:
-        return self.ex.fetch_ohlcv(symbol, timeframe, limit=limit)
+        try:
+            return self._fast_candles(symbol, timeframe, limit)
+        except Exception:
+            return self.ex.fetch_ohlcv(symbol, timeframe, limit=limit)
 
     def fetch_history(self, symbol: str, timeframe: str, since_ms: int) -> list:
         tf_ms = TIMEFRAMES[timeframe] * 1000
