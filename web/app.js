@@ -1128,6 +1128,7 @@ function renderSetup(view) {
 
     <div class="card prose">
       <h2>Recommended path</h2>
+      <p class="small"><a href="https://github.com/kingpk-boop/TrendBot/blob/main/TUTORIAL.md" target="_blank" rel="noopener">Read the full step-by-step tutorial ↗</a></p>
       <ol class="steps">
         <li><b>Backtest.</b> Open the Backtest tab and run BTC/USDT, 4h, 2 years. Look at the worst drop and the number of losing trades, not just the return.</li>
         <li><b>Paper trade for a few weeks.</b> Create a bot (it starts in paper mode) and press Start. Leave the app running. It uses real live prices but pretend money.</li>
