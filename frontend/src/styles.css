@@ -367,3 +367,9 @@ dialog form { margin: 0; }
   .page-head .btn-row { width: 100%; }
   .page-head .btn-row .btn { flex: 1; }
 }
+.brain-pick { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.brain-opt { display: flex; flex-direction: column; gap: 4px; padding: 12px; border: 1.5px solid var(--border); border-radius: 10px; cursor: pointer; }
+.brain-opt.on { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 7%, transparent); }
+.brain-opt input { position: absolute; opacity: 0; pointer-events: none; }
+.brain-opt:has(input:focus-visible) { outline: 2px solid var(--accent); outline-offset: 2px; }
+@media (max-width: 520px) { .brain-pick { grid-template-columns: 1fr; } }

@@ -35,10 +35,11 @@ function BotCard({ b }) {
   return (
     <a className="bot-card" href={`#/bots/${encodeURIComponent(b.id)}`}>
       <div className="top"><span className={"dot " + dot} title={b.running ? "Running" : "Stopped"} />
-        <span className="name">{c.name}</span>{c.ai_filter && <span className="badge ai" title="AI checks each buy">AI</span>}<ModeBadge mode={c.mode} exchange={c.exchange} /></div>
-      <div className="meta">{c.symbol} · {exchangeLabel(meta, c.exchange)} · {c.timeframe} candles · {fmtNum(c.trade_size)} {quoteOf(meta, c)}/trade</div>
+        <span className="name">{c.name}</span>{c.brain === "ai" ? <span className="badge ai" title="Claude makes the trading decisions">AI Autopilot</span>
+          : c.ai_filter && <span className="badge ai" title="AI checks each buy">AI</span>}<ModeBadge mode={c.mode} exchange={c.exchange} /></div>
+      <div className="meta">{c.brain === "ai" ? `${(c.watchlist || [c.symbol]).length} markets` : c.symbol} · {exchangeLabel(meta, c.exchange)} · {c.timeframe} candles · {fmtNum(c.trade_size)} {quoteOf(meta, c)}/trade</div>
       <div className="figs">
-        <div><div className="label">Price</div><div className="v">{fmtPrice(b.price)}</div></div>
+        <div><div className="label">{b.active_symbol || "Price"}</div><div className="v">{fmtPrice(b.price)}</div></div>
         <div><div className="label">Position</div><div className="v">{b.position
           ? <span className={cls(b.unrealized)}>{b.unrealized === null ? "Holding" : signed(b.unrealized)}</span>
           : <span className="muted">None</span>}</div></div>
@@ -127,7 +128,7 @@ function BotChart({ id, bot }) {
   }, 60000, [id, bot.position?.entry_price, bot.trades_count]);
   return (
     <div className="card">
-      <div className="card-head"><h2>Price &amp; signals</h2><span className="muted small">{extra.note}</span></div>
+      <div className="card-head"><h2>Price &amp; signals{bot.config.brain === "ai" && bot.active_symbol ? ` · ${bot.active_symbol}` : ""}</h2><span className="muted small">{extra.note}</span></div>
       <Legend items={extra.items} />
       <ChartView data={data} message={msg} id="bot-chart" />
     </div>
@@ -160,7 +161,7 @@ export function BotPage({ id }) {
     if (name === "delete" && !(await modal.confirm({ title: "Delete bot?", text: `Delete "${c.name}" and its trade history? This can't be undone.`, okLabel: "Delete", danger: true }))) return;
     if (name === "close") {
       const real = c.mode === "paper" ? "(paper trade - no real money)" : c.mode === "live" ? "This sells REAL coins/shares at the market price." : "This sells on your testnet account.";
-      if (!(await modal.confirm({ title: "Sell now?", text: `Sell the whole ${c.symbol} position at the current market price? ${real}`, okLabel: "Sell now", danger: true }))) return;
+      if (!(await modal.confirm({ title: "Sell now?", text: `Sell the whole ${bot.active_symbol || c.symbol} position at the current market price? ${real}`, okLabel: "Sell now", danger: true }))) return;
     }
     if (name === "start" && c.mode === "live" &&
       !(await modal.confirm({ title: "Start live trading?", text: `This bot will place real orders with real money: up to ${fmtNum(c.trade_size)} ${q} per trade on ${exLabel}.`, okLabel: "Start live bot", danger: true }))) return;
@@ -190,8 +191,11 @@ export function BotPage({ id }) {
     <>
       <a className="crumb" href="#/bots">← All bots</a>
       <div className="page-head" style={{ marginTop: 6 }}>
-        <div className="grow"><h1 id="bot-title">{c.name} <ModeBadge mode={c.mode} exchange={c.exchange} />{c.ai_filter && <> <span className="badge ai" title="AI checks each buy">AI check</span></>}</h1>
-          <div className="muted small">{c.symbol} on {exLabel} · {c.timeframe} candles · EMA {c.fast}/{c.slow} · stop {c.atr_mult}× ATR({c.atr_period}) · {fmtNum(c.trade_size)} {q} per trade · daily loss cap {c.daily_loss_cap > 0 ? `${fmtNum(c.daily_loss_cap)} ${q}` : "off"}</div></div>
+        <div className="grow"><h1 id="bot-title">{c.name} <ModeBadge mode={c.mode} exchange={c.exchange} />{c.brain === "ai"
+          ? <> <span className="badge ai" title="Claude makes the trading decisions">AI Autopilot</span></>
+          : c.ai_filter && <> <span className="badge ai" title="AI checks each buy">AI check</span></>}</h1>
+          {c.brain === "ai" ? <div className="muted small">Watching {(c.watchlist || [c.symbol]).join(", ")} on {exLabel} · decides every {c.timeframe} · up to {fmtNum(c.trade_size)} {q} per buy · daily loss cap {c.daily_loss_cap > 0 ? `${fmtNum(c.daily_loss_cap)} ${q}` : "off"}</div>
+          : <div className="muted small">{c.symbol} on {exLabel} · {c.timeframe} candles · EMA {c.fast}/{c.slow} · stop {c.atr_mult}× ATR({c.atr_period}) · {fmtNum(c.trade_size)} {q} per trade · daily loss cap {c.daily_loss_cap > 0 ? `${fmtNum(c.daily_loss_cap)} ${q}` : "off"}</div>}</div>
         <div className="btn-row" id="bot-actions">
           {bot.running ? btn("stop", "■ Stop") : btn("start", "▶ Start", "go")}
           {pos && btn("close", "Sell now", "danger")}
@@ -207,10 +211,14 @@ export function BotPage({ id }) {
       <div className="tiles">
         <Tile label="Status" value={<><span className={"dot " + (bot.error ? "err" : bot.running ? "on" : "")} /> {bot.running ? "Running" : "Stopped"}</>}
           sub={bot.last_tick ? "checked " + ago(bot.last_tick) : ""} />
-        <Tile label="Price" value={fmtPrice(bot.price)} sub={bot.price_time ? ago(bot.price_time) : ""} />
-        <Tile label="Trend (EMA)" value={!ind ? "—" : ind.fast > ind.slow ? "Up" : "Down"}
-          sub={ind ? `fast ${fmtPrice(ind.fast)} / slow ${fmtPrice(ind.slow)}` : "after first candle"} />
-        <Tile label="Position" value={pos ? fmtQty(pos.qty) : "None"} sub={pos ? `bought at ${fmtPrice(pos.entry_price)}` : "waiting for a buy signal"} />
+        <Tile label={"Price" + (c.brain === "ai" && bot.active_symbol ? ` · ${bot.active_symbol}` : "")} value={fmtPrice(bot.price)} sub={bot.price_time ? ago(bot.price_time) : ""} />
+        {c.brain === "ai"
+          ? <Tile label="Claude's last call" value={bot.ai_decision ? bot.ai_decision.action.toUpperCase() + (bot.ai_decision.symbol && bot.ai_decision.action !== "hold" ? " " + bot.ai_decision.symbol : "") : "—"}
+            sub={bot.ai_decision ? `${bot.ai_decision.confidence}% sure · ${ago(bot.ai_decision.time)}` : "at the next candle"} />
+          : <Tile label="Trend (EMA)" value={!ind ? "—" : ind.fast > ind.slow ? "Up" : "Down"}
+            sub={ind ? `fast ${fmtPrice(ind.fast)} / slow ${fmtPrice(ind.slow)}` : "after first candle"} />}
+        <Tile label="Position" value={pos ? `${fmtQty(pos.qty)}${c.brain === "ai" && pos.symbol ? " " + pos.symbol.split("/")[0] : ""}` : "None"}
+          sub={pos ? `bought at ${fmtPrice(pos.entry_price)}` : c.brain === "ai" ? "in cash" : "waiting for a buy signal"} />
         <Tile label="Trailing stop" value={pos ? fmtPrice(pos.stop) : "—"}
           sub={pos && bot.price ? `${fmtNum((bot.price / pos.stop - 1) * 100, 1)}% below price` : ""} />
         <Tile label="Open P&L" value={<span className={cls(bot.unrealized)}>{signed(bot.unrealized)}</span>} sub={pos ? q + " after sell fee" : ""} />
@@ -218,6 +226,14 @@ export function BotPage({ id }) {
         <Tile label="Total P&L" value={<span className={cls(bot.total_pnl)}>{signed(bot.total_pnl)}</span>} sub={`${bot.trades_count} trades, ${bot.wins} won`} />
       </div>
 
+      {c.brain === "ai" && bot.ai_decision && <div className="card ai-card" id="ai-decision">
+        <div className="card-head"><h2><span className="ai-mark">AI</span> Claude's latest decision</h2>
+          <span className="muted small">{fmtTime(bot.ai_decision.time)}</span></div>
+        <p style={{ margin: "0 0 6px" }}><b>{bot.ai_decision.action.toUpperCase()}{bot.ai_decision.symbol ? " " + bot.ai_decision.symbol : ""}</b>
+          {" "}· {bot.ai_decision.confidence}% sure{bot.ai_decision.action === "buy" ? ` · ${bot.ai_decision.size_pct}% of max size · stop ${bot.ai_decision.stop_atr}× ATR` : ""}</p>
+        <div className="ai-text">{bot.ai_decision.reason}</div>
+        {bot.ai_decision.outlook && <p className="muted small" style={{ marginBottom: 0 }}>Market view: {bot.ai_decision.outlook}</p>}
+      </div>}
       <BotChart id={id} bot={bot} />
       <AIReview kind="bot" botId={id} label="Ask AI about this bot" />
 
@@ -225,16 +241,18 @@ export function BotPage({ id }) {
         <div className="card"><h2>Trades</h2>
           {bot.trades?.length ? (
             <div className="table-wrap"><table>
-              <thead><tr><th>Time</th><th>Side</th><th className="r">Price</th><th className="r">Amount</th><th className="r">P&amp;L</th><th>Reason</th></tr></thead>
+              <thead><tr><th>Time</th><th>Side</th>{c.brain === "ai" && <th>Market</th>}<th className="r">Price</th><th className="r">Amount</th><th className="r">P&amp;L</th><th>Reason</th></tr></thead>
               <tbody>{bot.trades.map(t => (
                 <tr key={t.id}><td>{fmtTime(t.time)}</td>
                   <td><b className={t.side === "buy" ? "pos" : "neg"}>{t.side.toUpperCase()}</b>{t.mode !== c.mode && <> <span className="badge">{t.mode}</span></>}</td>
+                  {c.brain === "ai" && <td>{t.symbol || c.symbol}</td>}
                   <td className="r">{fmtPrice(t.price)}</td>
                   <td className="r">{fmtNum(t.quote)} {q}</td>
                   <td className={"r " + cls(t.pnl)}>{t.pnl === undefined ? "" : <>{signed(t.pnl)}{t.pnl_pct != null && <span className="small"> ({pct(t.pnl_pct)})</span>}</>}</td>
                   <td className="wrap muted">{t.reason}</td></tr>
               ))}</tbody></table></div>
-          ) : <p className="muted small">No trades yet. The bot buys only on a fresh cross of the fast EMA above the slow EMA, which can take days or weeks.</p>}
+          ) : <p className="muted small">{c.brain === "ai" ? "No trades yet. Claude only buys when a market on the watchlist looks clearly favourable - waiting in cash is often the right call."
+            : "No trades yet. The bot buys only on a fresh cross of the fast EMA above the slow EMA, which can take days or weeks."}</p>}
         </div>
         <div className="card"><h2>Activity log</h2>
           <div className="log">{bot.log?.length ? bot.log.map((l, i) => (

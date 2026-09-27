@@ -1,8 +1,8 @@
-"""Optional Claude-powered features: a pre-trade check for bots, and plain-language reviews.
+"""Claude-powered features: the AI Autopilot trader, a pre-trade check for rule bots, and reviews.
 
-The AI never gets more power than the rules already have: it can only *skip* a buy the strategy
-wants to make. Trade size, the daily loss cap and the trailing stop are enforced in code, and the
-AI cannot change them. If the AI is unavailable, bots follow the normal strategy.
+AI Autopilot bots let Claude decide what to buy, when to sell and how much to use, across a watchlist.
+Hard limits stay in code and the AI can't change them: spot only (no leverage or shorting), at most the
+bot's trade size per buy, a trailing stop on every position, and the daily loss cap.
 """
 import json
 import os
@@ -120,6 +120,59 @@ def review_entry(context: dict) -> TradeReview:
     review = response.parsed_output
     review.confidence = max(0, min(100, int(review.confidence)))
     return review
+
+
+# ---------------------------------------------------------------------------- AI Autopilot
+
+class TradeDecision(BaseModel):
+    action: Literal["buy", "sell", "hold"]
+    symbol: str          # for "buy": which watchlist market; otherwise the held one or ""
+    size_pct: int        # for "buy": % of the bot's maximum trade size to use (10-100)
+    stop_atr: float      # for "buy": trailing stop distance in ATRs (1.5-5)
+    confidence: int      # 0-100
+    reason: str
+    outlook: str         # one sentence on the market overall
+
+
+AUTOPILOT_SYSTEM = """You are the trader inside TrendBot's AI Autopilot: a spot trading bot that manages one position at a time for its owner, choosing among a small watchlist of markets. Once per candle you receive fresh data for every market on the watchlist, the current position (if any), the risk budget and the bot's recent trades, and you decide the single next action:
+
+- "buy": open a position in one watchlist market (set symbol, size_pct 10-100 = share of the maximum trade size, stop_atr 1.5-5 = trailing stop distance in ATRs). If a position is already open in a different market, buying means selling it first and switching - only do that when the new market is clearly better, because every switch pays fees twice.
+- "sell": close the current position and wait in cash.
+- "hold": keep the current position, or keep waiting in cash.
+
+The code enforces the hard limits and you cannot change them: spot only (no leverage, no shorting), the maximum trade size, a trailing stop on every position (checked every minute), and the daily loss cap. Buys below 60 confidence are not executed.
+
+How to decide - aim for the best risk-adjusted growth of the owner's money, not for activity:
+- Cash is a position. Most of the time the right answer is "hold". Trade when the evidence lines up.
+- Prefer markets in established uptrends (price above a rising 50 and 200 EMA, higher highs) with reasonable volatility, and enter on pullbacks or fresh breakouts rather than after a big vertical move (distance above the 20 EMA of more than ~2-3 ATRs or RSI above ~75 is stretched).
+- Avoid falling markets (price below a falling 200 EMA), and be quicker to sell when a held market loses its trend (closes below the 50 EMA with momentum rolling over) - protect gains and cut losers early.
+- Size down (size_pct 25-50) when signals are mixed or volatility is high; use a wider stop (3-4 ATR) for strong trends you want to ride and a tighter one (2 ATR) for short-term setups.
+- Learn from the recent trades: repeated losses in one market mean it's choppy - stand aside there.
+- Be honest about uncertainty. Never claim certainty about future prices.
+
+Write "reason" in one to three plain sentences a beginner can follow, citing the numbers that drove the decision. Write "outlook" as one sentence on the watchlist overall. For "sell"/"hold" set symbol to the held market (or "" when in cash), size_pct to 0 and stop_atr to 0."""
+
+
+def decide(context: dict) -> TradeDecision:
+    client = _client()
+    response = _call(lambda: client.with_options(timeout=150.0, max_retries=1).beta.messages.parse(
+        model=MODEL,
+        max_tokens=12000,
+        system=AUTOPILOT_SYSTEM,
+        messages=[{"role": "user", "content": "Current data (JSON):\n"
+                   + json.dumps(context, separators=(",", ":"), default=str)}],
+        output_format=TradeDecision,
+        output_config={"effort": "medium"},
+        **FALLBACK,
+    ))
+    if response.stop_reason == "refusal" or response.parsed_output is None:
+        raise AIError("The AI declined to decide this round.")
+    d = response.parsed_output
+    d.confidence = max(0, min(100, int(d.confidence)))
+    d.size_pct = max(10, min(100, int(d.size_pct or 100)))
+    d.stop_atr = max(1.5, min(5.0, float(d.stop_atr or 3.0)))
+    d.symbol = (d.symbol or "").strip().upper()
+    return d
 
 
 # ---------------------------------------------------------------------------- reviews for the web app

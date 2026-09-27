@@ -10,6 +10,8 @@ export function toBody(v) {
   for (const k of ["fast", "slow", "atr_period", "days"]) if (k in out) out[k] = parseInt(out[k], 10);
   for (const k of ["atr_mult", "trade_size", "daily_loss_cap"]) if (k in out) out[k] = parseFloat(out[k]);
   if (out.symbol) out.symbol = out.symbol.trim().toUpperCase();
+  if (typeof out.watchlist === "string")
+    out.watchlist = out.watchlist.split(/[\s,;]+/).map(x => x.trim().toUpperCase()).filter(Boolean);
   return out;
 }
 
@@ -24,6 +26,8 @@ export function useFields(initial) {
       if (key === "exchange") {
         const ex = meta.exchanges[value];
         if ((ex.kind === "stocks") === String(prev.symbol).includes("/")) next.symbol = ex.example;
+        if (typeof prev.watchlist === "string" && (ex.kind === "stocks") === prev.watchlist.includes("/"))
+          next.watchlist = (meta.scan_symbols?.[ex.kind] || [ex.example]).slice(0, 6).join(", ");
       }
       return next;
     });
@@ -31,7 +35,11 @@ export function useFields(initial) {
   return [v, set];
 }
 
-export function StrategyFields({ v, set }) {
+// Rough Claude cost per AI Autopilot decision (US$), for the hint in the form.
+const AI_COST_PER_DECISION = 0.07;
+const DECISIONS_PER_DAY = { "1h": 24, "4h": 6, "1d": 1 };
+
+export function StrategyFields({ v, set, ai = false }) {
   const { meta } = useApp();
   return (
     <>
@@ -39,14 +47,18 @@ export function StrategyFields({ v, set }) {
         <select name="exchange" value={v.exchange} onChange={set("exchange")}>
           {Object.entries(meta.exchanges).map(([k, e]) => <option key={k} value={k}>{e.label}</option>)}
         </select></label>
-      <label className="field">Symbol
-        <input name="symbol" value={v.symbol} onChange={set("symbol")} required maxLength={24} autoCapitalize="characters"
-          spellCheck="false" placeholder={meta.exchanges[v.exchange]?.example || "BTC/USDT"} /></label>
-      <label className="field">Candle size
+      {ai ? <label className="field wide">Watchlist <span className="hint">up to 8 markets Claude may trade, separated by commas</span>
+        <input name="watchlist" value={v.watchlist} onChange={set("watchlist")} required autoCapitalize="characters" spellCheck="false"
+          placeholder={meta.exchanges[v.exchange]?.kind === "stocks" ? "SPY, QQQ, AAPL" : "BTC/USDT, ETH/USDT, SOL/USDT"} /></label>
+        : <label className="field">Symbol
+          <input name="symbol" value={v.symbol} onChange={set("symbol")} required maxLength={24} autoCapitalize="characters"
+            spellCheck="false" placeholder={meta.exchanges[v.exchange]?.example || "BTC/USDT"} /></label>}
+      <label className="field">{ai ? "Decide every" : "Candle size"}
+        {ai && <span className="hint">≈ ${(AI_COST_PER_DECISION * (DECISIONS_PER_DAY[v.timeframe] || 1)).toFixed(2)}/day of Claude usage</span>}
         <select name="timeframe" value={v.timeframe} onChange={set("timeframe")}>
           {meta.timeframes.map(t => <option key={t}>{t}</option>)}
         </select></label>
-      <label className="field">Trade size <span className="hint">spent on each buy ({quoteOf(meta, v) || "quote"})</span>
+      <label className="field">{ai ? "Max trade size" : "Trade size"} <span className="hint">{ai ? "the most Claude may spend on one buy" : "spent on each buy"} ({quoteOf(meta, v) || "quote"})</span>
         <input name="trade_size" type="number" step="any" min="0" value={v.trade_size} onChange={set("trade_size")} required /></label>
       <label className="field">Daily loss cap <span className="hint">no new buys after this loss in a day; 0 = off</span>
         <input name="daily_loss_cap" type="number" step="any" min="0" value={v.daily_loss_cap} onChange={set("daily_loss_cap")} required /></label>
@@ -85,7 +97,15 @@ function ModeNote({ v }) {
 export function BotForm({ bot, preset, close }) {
   const { meta, modal } = useApp();
   const editing = !!bot;
-  const [v, set] = useFields({ ...meta.defaults, ...(preset || {}), ...(bot ? bot.config : {}), ...(!bot && !preset ? { name: "" } : {}) });
+  const [v, set] = useFields(() => {
+    const init = { ...meta.defaults, ...(preset || {}), ...(bot ? bot.config : {}), ...(!bot && !preset ? { name: "" } : {}) };
+    init.brain = bot ? (bot.config.brain || "rules") : preset ? "rules" : "ai";
+    const kind = meta.exchanges[init.exchange]?.kind || "crypto";
+    const list = bot?.config.watchlist?.length ? bot.config.watchlist : (meta.scan_symbols?.[kind] || [init.symbol]).slice(0, 6);
+    init.watchlist = list.join(", ");
+    return init;
+  });
+  const isAI = v.brain === "ai";
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
 
@@ -93,6 +113,7 @@ export function BotForm({ bot, preset, close }) {
     e.preventDefault();
     setError("");
     const body = { ...toBody(v), confirm_live: false };
+    if (!isAI) delete body.watchlist;
     if (body.mode === "live" && (bot ? bot.config.mode : null) !== "live") {
       if (!(await modal.open(c => <LiveConfirm cfg={body} close={c} />))) return;
       body.confirm_live = true;
@@ -114,9 +135,20 @@ export function BotForm({ bot, preset, close }) {
       <form id="bot-form" noValidate onSubmit={submit}>
         <div className="dlg-head"><h2>{editing ? "Edit bot" : "New bot"}</h2></div>
         <div className="dlg-body">
-          <div className="form-grid">
-            <label className="field wide">Name <input name="name" value={v.name} onChange={set("name")} maxLength={40} placeholder="e.g. BTC trend" /></label>
-            <StrategyFields v={v} set={set} />
+          <div className="brain-pick" role="radiogroup" aria-label="Who makes the trading decisions">
+            {[["ai", "AI Autopilot", "Claude studies every market on your watchlist at each new candle and decides what to buy, when to sell and how much to use."],
+              ["rules", "Fixed rules", "Classic trend following on one market: buy when the 20 EMA crosses above the 50 EMA, sell on the cross back or the trailing stop."]]
+              .map(([k, title, text]) => (
+                <label key={k} className={"brain-opt" + (v.brain === k ? " on" : "")}>
+                  <input type="radio" name="brain" value={k} checked={v.brain === k} onChange={set("brain")} />
+                  <b>{k === "ai" && <span className="ai-mark">AI</span>} {title}</b>
+                  <span className="small muted">{text}</span>
+                </label>))}
+          </div>
+          {isAI && !meta.ai?.source && <div className="alert warn" style={{ marginTop: 10 }}>AI Autopilot needs Claude connected: add your Anthropic API key in <a href="#/setup">Setup</a> before starting this bot.</div>}
+          <div className="form-grid" style={{ marginTop: 12 }}>
+            <label className="field wide">Name <input name="name" value={v.name} onChange={set("name")} maxLength={40} placeholder={isAI ? "AI Autopilot" : "e.g. BTC trend"} /></label>
+            <StrategyFields v={v} set={set} ai={isAI} />
             <label className="field wide">Mode
               <select name="mode" value={v.mode} onChange={set("mode")}>
                 <option value="paper">Paper - pretend money, real live prices (no keys needed)</option>
@@ -125,6 +157,9 @@ export function BotForm({ bot, preset, close }) {
               </select></label>
           </div>
           <div id="mode-note" style={{ marginTop: 12 }}><ModeNote v={v} /></div>
+          {isAI ? <p className="muted small" style={{ marginTop: 10 }}>Safety limits Claude can't change: spot only (no leverage or
+            shorting), never more than the max trade size per buy, a trailing stop on every position checked every minute, and the daily
+            loss cap. One position at a time. Profit is never guaranteed; start in paper mode and watch its decisions first.</p> : <>
           <label className="check">
             <input type="checkbox" name="ai_filter" checked={!!v.ai_filter} disabled={!meta.ai?.source && !v.ai_filter}
               onChange={e => set("ai_filter")({ target: { value: e.target.checked } })} />
@@ -132,7 +167,7 @@ export function BotForm({ bot, preset, close }) {
               false starts. It can't make trades bigger or remove the stop.{" "}
               {meta.ai?.source ? "About 1-3 US cents per signal on your Anthropic account." : <>Needs AI connected in <a href="#/setup">Setup</a>.</>}</span>
           </label>
-          <AdvancedFields v={v} set={set} />
+          <AdvancedFields v={v} set={set} /></>}
         </div>
         {error && <div className="alert error dlg-error" id="form-err">{error}</div>}
         <div className="dlg-foot">
