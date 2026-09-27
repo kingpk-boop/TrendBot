@@ -34,6 +34,8 @@ AI_MIN_CONFIDENCE = 60  # AI Autopilot buys below this confidence are not execut
 # On the website one scheduled check must finish within the server's time limit; AI decisions that
 # would start after this deadline wait for the next minute's check instead.
 AI_DEADLINE: list[float | None] = [None]
+CHECK_TIME_LIMIT = 285  # seconds one scheduled check may take on the website (server limit is 300)
+CHECK_STARTED: list[float | None] = [None]
 
 
 def is_ai(cfg: dict) -> bool:
@@ -497,8 +499,9 @@ class Bot:
             with self.lock:
                 first = next(iter(snaps.values()))
                 self.runtime.update(price=first["close"], price_time=utc_now_iso())
+        budget = CHECK_TIME_LIMIT - (time.time() - CHECK_STARTED[0]) if CHECK_STARTED[0] else 280.0
         try:
-            d = ai.decide(self._ai_round_context(snaps))
+            d, model = ai.decide(self._ai_round_context(snaps), budget_s=budget, turn=candle // tf_ms)
         except ai.AIError as exc:
             self.log(f"AI unavailable this round ({exc}). Holding; the stop still protects any position.", "warn")
             with self.lock:
@@ -506,7 +509,8 @@ class Bot:
             self.save()
             return
         with self.lock:
-            self.state["ai"] = {"time": utc_now_iso(), "action": d.action, "symbol": d.symbol,
+            self.state["ai"] = {"time": utc_now_iso(), "model": ai.MODEL_NAMES.get(model, model),
+                                "action": d.action, "symbol": d.symbol,
                                 "confidence": d.confidence, "size_pct": d.size_pct, "stop_atr": d.stop_atr,
                                 "reason": d.reason, "outlook": d.outlook}
             self.state["last_candle"] = candle
@@ -526,7 +530,8 @@ class Bot:
         with self.lock:
             pos = self.state["position"]
             held = (pos.get("symbol") or cfg["symbol"]) if pos else None
-        label = f"AI {d.action.upper()}{' ' + d.symbol if d.symbol else ''} ({d.confidence}% sure): {d.reason}"
+        model = (self.state.get("ai") or {}).get("model") or "AI"
+        label = f"{model}: {d.action.upper()}{' ' + d.symbol if d.symbol else ''} ({d.confidence}% sure). {d.reason}"
         if d.action == "hold" or (d.action == "buy" and d.symbol == held):
             self.log(label)
             return
@@ -716,7 +721,8 @@ class BotManager:
         token = store.acquire("bots", ttl_s=290, wait_s=5)
         if token is None:
             return {"ok": False, "detail": "Previous check still running."}
-        AI_DEADLINE[0] = time.time() + 150  # leave room for one AI decision within the 300 s limit
+        CHECK_STARTED[0] = time.time()
+        AI_DEADLINE[0] = time.time() + 120  # leave room for one AI decision within the 300 s limit
         try:
             self._load_cloud()
             running = [b for b in self.bots.values() if b.running]
@@ -726,7 +732,7 @@ class BotManager:
             self._flush_cloud([["SET", "trendbot:cron_last", now]])
             return {"ok": True, "checked": len(running), "time": now}
         finally:
-            AI_DEADLINE[0] = None
+            AI_DEADLINE[0] = CHECK_STARTED[0] = None
             store.release("bots", token)
 
     # ------------------------------------------------------------------ both modes

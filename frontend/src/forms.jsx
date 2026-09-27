@@ -36,7 +36,7 @@ export function useFields(initial) {
 }
 
 // Rough Claude cost per AI Autopilot decision (US$), for the hint in the form.
-const AI_COST_PER_DECISION = 0.07;
+const AI_COST_PER_DECISION = 0.12;
 const DECISIONS_PER_DAY = { "1h": 24, "4h": 6, "1d": 1 };
 
 export function StrategyFields({ v, set, ai = false }) {
@@ -165,7 +165,7 @@ export function BotForm({ bot, preset, close }) {
               onChange={e => set("ai_filter")({ target: { value: e.target.checked } })} />
             <span><b>AI check before each buy</b> - Claude looks at the market when a buy signal appears and can skip trades that look like
               false starts. It can't make trades bigger or remove the stop.{" "}
-              {meta.ai?.source ? "About 1-3 US cents per signal on your Anthropic account." : <>Needs AI connected in <a href="#/setup">Setup</a>.</>}</span>
+              {meta.ai?.source ? "About 5-15 US cents per signal on your Anthropic account." : <>Needs AI connected in <a href="#/setup">Setup</a>.</>}</span>
           </label>
           <AdvancedFields v={v} set={set} /></>}
         </div>

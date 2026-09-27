@@ -214,7 +214,7 @@ export function BotPage({ id }) {
         <Tile label={"Price" + (c.brain === "ai" && bot.active_symbol ? ` · ${bot.active_symbol}` : "")} value={fmtPrice(bot.price)} sub={bot.price_time ? ago(bot.price_time) : ""} />
         {c.brain === "ai"
           ? <Tile label="Claude's last call" value={bot.ai_decision ? bot.ai_decision.action.toUpperCase() + (bot.ai_decision.symbol && bot.ai_decision.action !== "hold" ? " " + bot.ai_decision.symbol : "") : "—"}
-            sub={bot.ai_decision ? `${bot.ai_decision.confidence}% sure · ${ago(bot.ai_decision.time)}` : "at the next candle"} />
+            sub={bot.ai_decision ? `${bot.ai_decision.confidence}% sure · ${bot.ai_decision.model || "AI"} · ${ago(bot.ai_decision.time)}` : "at the next candle"} />
           : <Tile label="Trend (EMA)" value={!ind ? "—" : ind.fast > ind.slow ? "Up" : "Down"}
             sub={ind ? `fast ${fmtPrice(ind.fast)} / slow ${fmtPrice(ind.slow)}` : "after first candle"} />}
         <Tile label="Position" value={pos ? `${fmtQty(pos.qty)}${c.brain === "ai" && pos.symbol ? " " + pos.symbol.split("/")[0] : ""}` : "None"}
@@ -228,7 +228,7 @@ export function BotPage({ id }) {
 
       {c.brain === "ai" && bot.ai_decision && <div className="card ai-card" id="ai-decision">
         <div className="card-head"><h2><span className="ai-mark">AI</span> Claude's latest decision</h2>
-          <span className="muted small">{fmtTime(bot.ai_decision.time)}</span></div>
+          <span className="muted small">{bot.ai_decision.model ? bot.ai_decision.model + " · " : ""}{fmtTime(bot.ai_decision.time)}</span></div>
         <p style={{ margin: "0 0 6px" }}><b>{bot.ai_decision.action.toUpperCase()}{bot.ai_decision.symbol ? " " + bot.ai_decision.symbol : ""}</b>
           {" "}· {bot.ai_decision.confidence}% sure{bot.ai_decision.action === "buy" ? ` · ${bot.ai_decision.size_pct}% of max size · stop ${bot.ai_decision.stop_atr}× ATR` : ""}</p>
         <div className="ai-text">{bot.ai_decision.reason}</div>

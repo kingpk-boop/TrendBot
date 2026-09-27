@@ -56,7 +56,7 @@ dollars of credit). Then:
 - The bot form gets **AI check before each buy**: when a buy signal appears, Claude looks at the market
   (how stretched the price is, the longer trend, volatility, the bot's recent trades) and can **skip** a
   trade that looks like a false start. It can't make trades bigger or remove the stop. If the AI is
-  unreachable, the bot follows its normal rules. Each check costs about 1-3 US cents.
+  unreachable, the bot follows its normal rules. Each check costs about 5-15 US cents.
 
 The AI is a second opinion, not a crystal ball. It can be wrong, and a backtest can't tell you how the AI
 check would have done in the past.
@@ -75,8 +75,12 @@ time, never more than your max trade size per buy, a trailing stop on every posi
 the daily loss cap, and no buy below 60% confidence. If Claude is unreachable the bot holds and the stop
 keeps protecting the position.
 
-Cost: roughly 7 US cents of Anthropic usage per decision - about $1.70/day on 1h candles, $0.40/day on 4h,
-$0.07/day on 1d. Profit is never guaranteed: run it in paper mode first and read its decisions.
+Models: every decision runs at high effort on Claude Opus 5.5 or Claude Opus 5 (they take turns and back each
+other up). Claude Sonnet 5 is used only for a decision where both Opus models are unavailable (usage or rate
+limits, overload); the next decision goes back to Opus. The bot page shows which model made each decision.
+
+Cost: roughly 12 US cents of Anthropic usage per decision - about $2.90/day on 1h candles, $0.70/day on 4h,
+$0.12/day on 1d. Profit is never guaranteed: run it in paper mode first and read its decisions.
 
 ## 3. Make a paper bot (pretend money)
 
