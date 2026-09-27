@@ -236,14 +236,35 @@ class StrategyFields(BaseModel):
 class BotConfigIn(StrategyFields):
     name: str = Field("", max_length=40)
     mode: str = "paper"
-    ai_filter: bool = False  # ask the AI to approve each buy signal
+    brain: str = "ai"  # "ai" = Claude decides (AI Autopilot); "rules" = EMA crossover rules
+    watchlist: list[str] = Field(default_factory=list, max_length=8)  # markets the AI Autopilot may trade
+    ai_filter: bool = False  # rules bots: ask the AI to approve each buy signal
     confirm_live: bool = False
 
     @model_validator(mode="after")
     def _check_mode(self):
         if self.mode not in MODES:
             raise ValueError(f"mode must be one of {', '.join(MODES)}")
-        self.name = self.name.strip() or f"{self.symbol} {self.timeframe}"
+        if self.brain not in ("ai", "rules"):
+            raise ValueError("brain must be 'ai' or 'rules'")
+        if self.brain == "ai":
+            kind = EXCHANGES[self.exchange]["kind"]
+            pattern = r"[A-Z0-9]{2,12}/[A-Z0-9]{2,12}" if kind == "crypto" else r"[A-Z][A-Z.]{0,9}"
+            clean = []
+            for raw in self.watchlist or SCAN_SYMBOLS[kind][:6]:
+                sym = raw.strip().upper()
+                if sym and sym not in clean:
+                    if not re.fullmatch(pattern, sym):
+                        raise ValueError(f"'{raw}' isn't a valid symbol here "
+                                         + ("(like BTC/USDT)." if kind == "crypto" else "(like AAPL)."))
+                    clean.append(sym)
+            if not clean:
+                raise ValueError("Add at least one market to the watchlist.")
+            self.watchlist, self.symbol, self.ai_filter = clean[:8], clean[0], False
+            self.name = self.name.strip() or "AI Autopilot"
+        else:
+            self.watchlist = []
+            self.name = self.name.strip() or f"{self.symbol} {self.timeframe}"
         return self
 
     def to_config(self) -> dict:

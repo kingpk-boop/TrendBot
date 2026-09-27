@@ -61,6 +61,23 @@ dollars of credit). Then:
 The AI is a second opinion, not a crystal ball. It can be wrong, and a backtest can't tell you how the AI
 check would have done in the past.
 
+## 2d. AI Autopilot: let Claude trade
+
+With Claude connected, a new bot defaults to **AI Autopilot**. Instead of fixed rules on one coin, Claude
+looks at every market on your **watchlist** (up to 8, e.g. BTC/USDT, ETH/USDT, SOL/USDT) at each new candle
+and decides: **buy** one of them (and how much, 10-100% of your max trade size, with how wide a stop),
+**sell**, **switch** to a better market, or **hold**. It sees trend, momentum (RSI), volatility, recent
+moves and volume for each market, plus its own open position, recent trades and past decisions, so it
+adapts as markets change. Each decision and its reasoning appear on the bot page.
+
+Limits written in code that Claude can't change: spot only (no leverage or shorting), one position at a
+time, never more than your max trade size per buy, a trailing stop on every position (checked every minute),
+the daily loss cap, and no buy below 60% confidence. If Claude is unreachable the bot holds and the stop
+keeps protecting the position.
+
+Cost: roughly 7 US cents of Anthropic usage per decision - about $1.70/day on 1h candles, $0.40/day on 4h,
+$0.07/day on 1d. Profit is never guaranteed: run it in paper mode first and read its decisions.
+
 ## 3. Make a paper bot (pretend money)
 
 1. In the PC app, go to **Bots → + New bot** (or **Create bot from these settings** after a backtest).

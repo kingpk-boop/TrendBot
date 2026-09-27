@@ -5,7 +5,7 @@
   ],
   "functions": {
     "index.py": {
-      "maxDuration": 60,
+      "maxDuration": 300,
       "excludeFiles": "{frontend/**,tools/**,data/**,.venv/**,*.bat,Dockerfile,render.yaml,README.md,TUTORIAL.md}"
     }
   },
