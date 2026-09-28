@@ -14,16 +14,12 @@ from pydantic import BaseModel
 
 from .config import load_stored_secret, remove_account, save_account
 
-# Every request runs at high effort. Opus 5.5 and Opus 5 take turns (each backs the other up if it's
-# busy or unavailable); Sonnet 5 is used only when both Opus models are out of reach (usage/rate limits,
-# overload, no access, spending limit) - never as a first choice.
+# Only Opus models, always at high effort. Opus 5.5 and Opus 5 take turns and each backs the other up if
+# it's busy or unavailable. If both are unavailable the request fails and the bot simply holds that round.
 PRIMARY_MODELS = ("claude-opus-5-5", "claude-opus-5")
-LAST_RESORT_MODEL = "claude-sonnet-5"
 MODEL = PRIMARY_MODELS[0]
 EFFORT = "high"
-MODEL_NAMES = {"claude-opus-5-5": "Claude Opus 5.5", "claude-opus-5": "Claude Opus 5", "claude-sonnet-5": "Claude Sonnet 5"}
-# Server-side refusal fallback: if the model declines, the API reroutes to another model in the same call.
-FALLBACK = {"betas": ["server-side-fallback-2026-07-01"], "fallbacks": "default"}
+MODEL_NAMES = {"claude-opus-5-5": "Claude Opus 5.5", "claude-opus-5": "Claude Opus 5"}
 _turn = [0]  # which Opus model goes first next time (alternates)
 PROVIDER = "anthropic"  # key in data/accounts.json
 
@@ -44,7 +40,7 @@ def ai_key() -> tuple[str | None, str | None]:
 
 
 def ai_status() -> dict:
-    return {"source": ai_key()[1], "model": "Claude Opus 5.5 / Opus 5 (high effort), Sonnet 5 only as backup"}
+    return {"source": ai_key()[1], "model": "Claude Opus 5.5 / Opus 5 (high effort)"}
 
 
 def _client(key: str | None = None) -> anthropic.Anthropic:
@@ -93,26 +89,29 @@ def _could_other_model_help(e: anthropic.APIError) -> bool:
 
 
 def _run(make_request, budget_s: float = 280.0, turn: int | None = None):
-    """Run a request on the model chain. make_request(model, extra_kwargs) -> response.
-    Returns (response, model). Opus 5.5 and Opus 5 alternate who goes first (by `turn` when given);
-    Sonnet 5 is the last resort."""
+    """Run a request on the model chain. make_request(model) -> response.
+    Returns (response, model). Opus 5.5 and Opus 5 alternate who goes first (by `turn` when given)."""
     if turn is None:
         turn = _turn[0]
         _turn[0] += 1
     first = turn % 2
-    chain = [PRIMARY_MODELS[first], PRIMARY_MODELS[1 - first], LAST_RESORT_MODEL]
+    chain = [PRIMARY_MODELS[first], PRIMARY_MODELS[1 - first]]
     start, reasons = time.time(), []
     for model in chain:
         if reasons and time.time() - start > budget_s - 60:
             break  # not enough time left for another attempt
-        extra = {} if model == LAST_RESORT_MODEL else dict(FALLBACK)
         try:
-            return make_request(model, extra), model
+            response = make_request(model)
         except anthropic.APIError as e:
             if not _could_other_model_help(e):
                 raise _friendly(e) from None
             reasons.append(f"{MODEL_NAMES[model]}: {_friendly(e)}")
-    raise AIError("No Claude model was available right now. " + " ".join(reasons))
+            continue
+        if response.stop_reason == "refusal":  # let the other Opus model try; never switch to other models
+            reasons.append(f"{MODEL_NAMES[model]} declined.")
+            continue
+        return response, model
+    raise AIError("Neither Claude Opus model was available right now. " + " ".join(reasons))
 
 
 def connect(key: str) -> None:
@@ -155,7 +154,7 @@ Never claim certainty about future prices."""
 
 def review_entry(context: dict) -> TradeReview:
     client = _client().with_options(max_retries=0)
-    response, _ = _run(lambda model, extra: client.beta.messages.parse(
+    response, _ = _run(lambda model: client.beta.messages.parse(
         model=model,
         max_tokens=16000,
         system=REVIEW_SYSTEM,
@@ -163,7 +162,6 @@ def review_entry(context: dict) -> TradeReview:
                    + json.dumps(context, separators=(",", ":"))}],
         output_format=TradeReview,
         output_config={"effort": EFFORT},
-        **extra,
     ))
     if response.stop_reason == "refusal" or response.parsed_output is None:
         raise AIError("The AI declined to review this trade.")
@@ -206,7 +204,7 @@ Write "reason" in one to three plain sentences a beginner can follow, citing the
 def decide(context: dict, budget_s: float = 280.0, turn: int | None = None) -> tuple["TradeDecision", str]:
     """Returns (decision, model id that made it). `turn` picks which Opus model goes first."""
     client = _client().with_options(timeout=min(170.0, budget_s - 30), max_retries=0)
-    response, model = _run(lambda model, extra: client.beta.messages.parse(
+    response, model = _run(lambda model: client.beta.messages.parse(
         model=model,
         max_tokens=32000,
         system=AUTOPILOT_SYSTEM,
@@ -214,7 +212,6 @@ def decide(context: dict, budget_s: float = 280.0, turn: int | None = None) -> t
                    + json.dumps(context, separators=(",", ":"), default=str)}],
         output_format=TradeDecision,
         output_config={"effort": EFFORT},
-        **extra,
     ), budget_s, turn)
     if response.stop_reason == "refusal" or response.parsed_output is None:
         raise AIError("The AI declined to decide this round.")
@@ -253,14 +250,13 @@ def analyze(kind: str, data: dict) -> str:
     if kind not in PROMPTS:
         raise AIError("Unknown analysis type.")
     client = _client().with_options(max_retries=0)
-    response, _ = _run(lambda model, extra: client.beta.messages.create(
+    response, _ = _run(lambda model: client.beta.messages.create(
         model=model,
         max_tokens=16000,
         system=ANALYSIS_SYSTEM,
         messages=[{"role": "user", "content": f"{PROMPTS[kind]}\n\nData (JSON):\n"
                    + json.dumps(data, separators=(",", ":"), default=str)}],
         output_config={"effort": EFFORT},
-        **extra,
     ))
     if response.stop_reason == "refusal":
         raise AIError("The AI declined to answer this one.")
