@@ -212,8 +212,8 @@ class StrategyFields(BaseModel):
     slow: int = Field(50, ge=3, le=400)
     atr_period: int = Field(14, ge=2, le=100)
     atr_mult: float = Field(3.0, ge=0.5, le=10)
-    trade_size: float = Field(20.0, gt=0, le=1_000_000)
-    daily_loss_cap: float = Field(10.0, ge=0, le=1_000_000)
+    trade_size: float = Field(5.0, gt=0, le=1_000_000)
+    daily_loss_cap: float = Field(3.0, ge=0, le=1_000_000)
 
     @model_validator(mode="after")
     def _check(self):

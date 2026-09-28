@@ -106,6 +106,13 @@ class CcxtMarket:
         if min_cost and trade_size < min_cost:
             raise MarketError(f"Trade size must be at least {min_cost} {m['quote']} on this market.")
 
+    def min_order(self, symbol: str) -> float:
+        """The smallest order value (in the quote currency) the exchange accepts, or 0 if unknown."""
+        try:
+            return float((self._market(symbol).get("limits", {}).get("cost") or {}).get("min") or 0)
+        except MarketError:
+            return 0.0
+
     def _fast_price(self, symbol: str) -> float:
         market_id = symbol.replace("/", "")
         if self.exchange_id == "binance":
@@ -281,6 +288,9 @@ class AlpacaMarket:
             raise MarketError(f"{symbol} is not tradable on Alpaca.")
         if trade_size < 1:
             raise MarketError("Alpaca's minimum order is $1.")
+
+    def min_order(self, symbol: str) -> float:
+        return 1.0
 
     def last_price(self, symbol: str) -> float:
         d = self._get(self.DATA_URL + f"/v2/stocks/{symbol}/trades/latest", feed=self.feed)

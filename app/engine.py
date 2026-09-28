@@ -558,7 +558,10 @@ class Bot:
                 self.log("Couldn't fully sell the old position, so the switch is postponed.", "warn")
                 return
         snap = snaps[d.symbol]
-        quote = round(float(cfg["trade_size"]) * d.size_pct / 100, 2)
+        max_quote = float(cfg["trade_size"])
+        # Exchanges reject tiny orders: round a small AI-sized buy up to the minimum, never above the max.
+        floor = self.market.min_order(d.symbol) * 1.05 if hasattr(self.market, "min_order") else 0
+        quote = round(min(max_quote, max(max_quote * d.size_pct / 100, floor)), 2)
         self.log(label)
         self._buy(snap["atr"], Params(), f"AI buy ({d.confidence}%, {d.size_pct}% size)", symbol=d.symbol,
                   quote=quote, stop_mult=d.stop_atr)
