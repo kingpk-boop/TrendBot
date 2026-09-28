@@ -176,7 +176,7 @@ class TradeDecision(BaseModel):
     action: Literal["buy", "sell", "hold"]
     symbol: str          # for "buy": which watchlist market; otherwise the held one or ""
     size_pct: int        # for "buy": % of the bot's maximum trade size to use (10-100)
-    stop_atr: float      # for "buy": trailing stop distance in ATRs (1.5-5)
+    stop_atr: float      # "buy": trailing stop distance in ATRs (1.5-5); "hold" while holding: tighten to this (0 = keep)
     confidence: int      # 0-100
     reason: str
     outlook: str         # one sentence on the market overall
@@ -186,9 +186,13 @@ AUTOPILOT_SYSTEM = """You are the trader inside TrendBot's AI Autopilot: a spot 
 
 - "buy": open a position in one watchlist market (set symbol, size_pct 10-100 = share of the maximum trade size, stop_atr 1.5-5 = trailing stop distance in ATRs). If a position is already open in a different market, buying means selling it first and switching - only do that when the new market is clearly better, because every switch pays fees twice.
 - "sell": close the current position and wait in cash.
-- "hold": keep the current position, or keep waiting in cash.
+- "hold": keep the current position, or keep waiting in cash. While holding you may also tighten the trailing stop by setting stop_atr (1-5): the stop moves up to (highest price since buying - stop_atr x ATR) if that is higher than the current stop. The code never loosens a stop. Use it to lock in gains after a strong run or when momentum fades; set stop_atr 0 to leave the stop as it is.
 
 The code enforces the hard limits and you cannot change them: spot only (no leverage, no shorting), the maximum trade size, a trailing stop on every position (checked every minute), and the daily loss cap. Buys below 60 confidence are not executed.
+
+What you get for each market: trend (EMA 20/50/200 and their slopes), trend strength (ADX14; above ~20-25 means a real trend), momentum (RSI14, MACD histogram and whether it's rising), volatility (ATR %, Bollinger width), how stretched price is (distance above the 20 EMA in ATRs, drawdown from the 90-candle high), volume vs its average, performance vs BTC, a daily-candle view (the longer trend) and "tested_rules": what the bot's backtested trend rules say right now. Across markets you get the breadth (how many are above their 200 EMA - a weak market lifts few boats) and your own track record per market.
+
+Evidence from 5-year backtests on these coins: buying only above the 200 EMA, and when ADX shows a real trend, clearly improved results and roughly halved drawdowns; buying in downtrends was the main source of losses. Treat tested_rules as a strong, well-tested prior and go against it only with clear reasons.
 
 How to decide - aim for the best risk-adjusted growth of the owner's money, not for activity:
 - Cash is a position. Most of the time the right answer is "hold". Trade when the evidence lines up.
@@ -198,7 +202,7 @@ How to decide - aim for the best risk-adjusted growth of the owner's money, not 
 - Learn from the recent trades: repeated losses in one market mean it's choppy - stand aside there.
 - Be honest about uncertainty. Never claim certainty about future prices.
 
-Write "reason" in one to three plain sentences a beginner can follow, citing the numbers that drove the decision. Write "outlook" as one sentence on the watchlist overall. For "sell"/"hold" set symbol to the held market (or "" when in cash), size_pct to 0 and stop_atr to 0."""
+Write "reason" in one to three plain sentences a beginner can follow, citing the numbers that drove the decision. Write "outlook" as one sentence on the watchlist overall. For "sell"/"hold" set symbol to the held market (or "" when in cash) and size_pct to 0; stop_atr is 0 unless you are tightening the stop."""
 
 
 def decide(context: dict, budget_s: float = 280.0, turn: int | None = None) -> tuple["TradeDecision", str]:
@@ -218,7 +222,10 @@ def decide(context: dict, budget_s: float = 280.0, turn: int | None = None) -> t
     d = response.parsed_output
     d.confidence = max(0, min(100, int(d.confidence)))
     d.size_pct = max(10, min(100, int(d.size_pct or 100)))
-    d.stop_atr = max(1.5, min(5.0, float(d.stop_atr or 3.0)))
+    if d.action == "buy":
+        d.stop_atr = max(1.5, min(5.0, float(d.stop_atr or 3.0)))
+    else:  # 0 = leave the stop alone; otherwise a request to tighten (applied only if tighter)
+        d.stop_atr = 0.0 if not d.stop_atr or d.stop_atr <= 0 else max(1.0, min(5.0, float(d.stop_atr)))
     d.symbol = (d.symbol or "").strip().upper()
     return d, model
 

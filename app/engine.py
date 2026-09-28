@@ -24,7 +24,7 @@ from . import ai
 from .config import BOTS_DIR, EXCHANGES, POLL_SECONDS, TIMEFRAMES
 from .exchanges import MarketError, NothingToSell, make_broker, make_market
 from .store import CLOUD, store
-from .strategy import Params, compute, ema, entry_signal, exit_signal, warmup_bars
+from .strategy import Params, adx, compute, ema, entry_signal, exit_signal, warmup_bars
 
 MAX_LOG = 300
 
@@ -285,7 +285,8 @@ class Bot:
             if cap > 0 and today <= -cap:
                 self.log(f"Buy signal skipped: today's loss ({fmt(today)}) hit the daily cap of {fmt(cap)}.", "warn")
             else:
-                reason = "EMA cross up"
+                crossed = ind_all["fast"][i - 1] <= ind_all["slow"][i - 1]
+                reason = "EMA cross up" if crossed else "Uptrend breakout (20-candle high)"
                 if cfg.get("ai_filter"):
                     review = self._ai_review(closed, ind_all, i, p)
                     if review and review.decision == "skip":
@@ -295,7 +296,7 @@ class Bot:
                         self.save()
                         return
                     if review:
-                        reason = f"EMA cross up · AI approved ({review.confidence}%)"
+                        reason = f"{reason} · AI approved ({review.confidence}%)"
                         self.log(f"AI approved the buy ({review.confidence}% sure): {review.reason}")
                 self._buy(ind_all["atr"][i], p, reason)
         with self.lock:
@@ -397,16 +398,37 @@ class Bot:
         """Indicators for one watchlist market, on the bot's candle size."""
         tf_ms = TIMEFRAMES[self.config["timeframe"]] * 1000
         now_ms = int(time.time() * 1000)
-        candles = [c for c in self.market.fetch_candles(symbol, self.config["timeframe"], limit=300)
+        tf = self.config["timeframe"]
+        candles = [c for c in self.market.fetch_candles(symbol, tf, limit=500)
                    if c[0] + tf_ms <= now_ms]
         if len(candles) < 60:
             raise MarketError(f"Not enough history for {symbol}.")
         closes, highs, lows = [c[4] for c in candles], [c[2] for c in candles], [c[3] for c in candles]
         vols = [c[5] for c in candles]
         e20, e50, e200 = ema(closes, 20), ema(closes, 50), ema(closes, min(200, len(closes)))
-        a = compute(candles, Params())["atr"]
+        # The tested rule strategy's view (the defaults that did best in 5-year backtests for this candle size).
+        rules = Params(reentry=tf == "1d", adx_min=0 if tf == "1d" else 20)
+        ind = compute(candles, rules)
+        a = ind["atr"]
+        adx_now = adx(highs, lows, closes)[-1]
         c, atr_now = closes[-1], a[-1]
-        per_day = max(1, 86400 // TIMEFRAMES[self.config["timeframe"]])
+        per_day = max(1, 86400 // TIMEFRAMES[tf])
+        macd = [x - y for x, y in zip(ema(closes, 12), ema(closes, 26))]
+        macd_hist = [m - sg for m, sg in zip(macd, ema(macd, 9))]
+        sd20 = (sum((x - sum(closes[-20:]) / 20) ** 2 for x in closes[-20:]) / 20) ** 0.5
+        # Longer view: daily candles (skipped when the bot already decides on daily candles).
+        daily = None
+        if tf != "1d":
+            try:
+                dc = [x for x in self.market.fetch_candles(symbol, "1d", limit=260) if x[0] + 86_400_000 <= now_ms]
+                dcl = [x[4] for x in dc]
+                if len(dcl) >= 60:
+                    d50, d200 = ema(dcl, 50), ema(dcl, min(200, len(dcl)))
+                    daily = {"above_ema50": dcl[-1] > d50[-1], "above_ema200": dcl[-1] > d200[-1],
+                             "ema50_rising": d50[-1] > d50[-6], "rsi14": round(rsi(dcl[-120:]) or 0, 1),
+                             "change_90d_pct": round((dcl[-1] / dcl[max(0, len(dcl) - 91)] - 1) * 100, 1)}
+            except Exception:
+                daily = None
 
         def chg(bars):
             return round((c / closes[max(0, len(closes) - 1 - bars)] - 1) * 100, 2)
@@ -422,6 +444,15 @@ class Bot:
                            "30_days": chg(30 * per_day)},
             "high_30_candles": max(highs[-30:]), "low_30_candles": min(lows[-30:]),
             "volume_vs_20_avg": round(vols[-1] / vol_avg, 2) if vol_avg else None,
+            "adx14_trend_strength": round(adx_now, 1),
+            "macd_histogram_pct": round(macd_hist[-1] / c * 100, 4),
+            "macd_momentum": "rising" if macd_hist[-1] > macd_hist[-2] else "falling",
+            "bollinger_width_pct": round(4 * sd20 / c * 100, 2),
+            "drawdown_from_90_candle_high_pct": round((c / max(highs[-90:]) - 1) * 100, 2),
+            "daily_view": daily,
+            "tested_rules": {"would_buy_now": entry_signal(ind, len(candles) - 1),
+                             "in_uptrend": ind["fast"][-1] > ind["slow"][-1] and c > ind["trend"][-1],
+                             "exit_signal": exit_signal(ind, len(candles) - 1)},
             "last_24_closes": [round(x, 8) for x in closes[-24:]],
         }
 
@@ -443,6 +474,19 @@ class Bot:
                     "trailing_stop": pos["stop"], "stop_atr": pos.get("stop_mult")}
         cap, today = float(cfg["daily_loss_cap"]), self.today_pnl()
         quote = EXCHANGES[cfg["exchange"]]
+        with self.lock:
+            record: dict = {}
+            for t in self._mode_sells():
+                r = record.setdefault(t.get("symbol", cfg["symbol"]), {"trades": 0, "wins": 0, "total_pnl_pct": 0.0})
+                r["trades"] += 1
+                r["wins"] += 1 if t["pnl"] > 0 else 0
+                r["total_pnl_pct"] = round(r["total_pnl_pct"] + (t.get("pnl_pct") or 0), 2)
+        ref = snaps.get("BTC/USDT") or next(iter(snaps.values()))
+        for sn in snaps.values():
+            sn["vs_" + ref["symbol"].split("/")[0] + "_7d_pct"] = round(sn["change_pct"]["7_days"] - ref["change_pct"]["7_days"], 2)
+        breadth = {"markets_above_ema200": sum(1 for sn in snaps.values() if sn["close"] > sn["ema200"]),
+                   "markets_total": len(snaps),
+                   "rules_buy_signals_now": [sn["symbol"] for sn in snaps.values() if sn["tested_rules"]["would_buy_now"]]}
         return {
             "time_utc": utc_now_iso(), "exchange": quote["label"], "mode": cfg["mode"],
             "candle": cfg["timeframe"], "fee_per_side_pct": quote["fee"] * 100,
@@ -450,6 +494,7 @@ class Bot:
             "risk": {"today_pnl": round(today, 2), "daily_loss_cap": cap,
                      "new_buys_allowed": not (cap > 0 and today <= -cap)},
             "your_previous_decision": last, "recent_trades": recent,
+            "your_track_record_by_market": record, "market_breadth": breadth,
             "watchlist": [dict((k, v) for k, v in s.items() if k != "atr") for s in snaps.values()],
         }
 
@@ -534,6 +579,8 @@ class Bot:
         label = f"{model}: {d.action.upper()}{' ' + d.symbol if d.symbol else ''} ({d.confidence}% sure). {d.reason}"
         if d.action == "hold" or (d.action == "buy" and d.symbol == held):
             self.log(label)
+            if held and d.action == "hold" and d.stop_atr > 0 and held in snaps:
+                self._tighten_stop(d.stop_atr, snaps[held])
             return
         if d.action == "sell":
             if held:
@@ -565,6 +612,19 @@ class Bot:
         self.log(label)
         self._buy(snap["atr"], Params(), f"AI buy ({d.confidence}%, {d.size_pct}% size)", symbol=d.symbol,
                   quote=quote, stop_mult=d.stop_atr)
+
+    def _tighten_stop(self, stop_atr: float, snap: dict) -> None:
+        """Move the trailing stop up at the AI's request - never down, and never above the price."""
+        with self.lock:
+            pos = self.state["position"]
+            if not pos:
+                return
+            new = pos["high"] - stop_atr * snap["atr"]
+            if new <= pos["stop"] or new >= snap["close"]:
+                return
+            old = pos["stop"]
+            pos.update(stop=new, atr=snap["atr"], stop_mult=min(pos.get("stop_mult", stop_atr), stop_atr))
+        self.log(f"Stop tightened from {fmt(old)} to {fmt(new)} ({stop_atr}x ATR below the high).")
 
     def active_symbol(self) -> str:
         pos = self.state.get("position")
@@ -608,7 +668,9 @@ class Bot:
             elif pos:
                 status = "Holding. Sells on an EMA cross down or if price hits the trailing stop."
             elif ind and ind["fast"] > ind["slow"]:
-                status = ("Uptrend already under way - waiting for the next fresh cross up "
+                status = ("Uptrend under way - waiting for a new 20-candle closing high above the 200 EMA "
+                          "(or the next fresh cross) to buy." if cfg.get("reentry") else
+                          "Uptrend already under way - waiting for the next fresh cross up "
                           "(the bot doesn't chase an old signal).")
             elif ind:
                 status = "Waiting for the fast EMA to cross above the slow EMA."

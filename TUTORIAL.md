@@ -82,6 +82,22 @@ trailing stop keeps protecting any position. The bot page shows which model made
 Cost: roughly 12 US cents of Anthropic usage per decision - about $2.90/day on 1h candles, $0.70/day on 4h,
 $0.12/day on 1d. Profit is never guaranteed: run it in paper mode first and read its decisions.
 
+## 2e. What makes the bots smarter (tested on real data)
+
+Every rule change was tested on 5 years of Binance prices for BTC, ETH, SOL, BNB, XRP, ADA, LINK and
+DOGE, split into two halves; only changes that helped in both halves were kept:
+- **Trend filter** (on by default): only buy above the 200-candle average. Helped on every candle size and
+  cut the worst drops a lot.
+- **Trend strength (ADX 20)** (default on 4h/1h): only buy when a real trend is under way. On 4h it
+  roughly halved drawdowns.
+- **Re-entry on breakouts** (default on 1d): buy again on a new 20-candle high during an uptrend.
+You can change these under **Strategy settings (advanced)** and compare them in **Backtest**.
+
+The AI Autopilot now sees, for every coin: trend strength (ADX), MACD momentum, volatility, how far it is
+below its recent high, the daily-candle trend, strength vs BTC, how many coins are in uptrends, what the
+tested rules say, and its own record per coin. While holding it can also **tighten** the trailing stop to
+lock in gains (never loosen it).
+
 ## 3. Make a paper bot (pretend money)
 
 1. In the PC app, go to **Bots → + New bot** (or **Create bot from these settings** after a backtest).

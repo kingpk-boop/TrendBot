@@ -212,6 +212,9 @@ class StrategyFields(BaseModel):
     slow: int = Field(50, ge=3, le=400)
     atr_period: int = Field(14, ge=2, le=100)
     atr_mult: float = Field(3.0, ge=0.5, le=10)
+    trend_filter: bool = True  # only buy above the 200-candle EMA
+    reentry: bool = False      # re-enter on a 20-candle closing high while the trend is up
+    adx_min: float = Field(20.0, ge=0, le=60)  # only buy when trend strength (ADX 14) is at least this; 0 = off
     trade_size: float = Field(5.0, gt=0, le=1_000_000)
     daily_loss_cap: float = Field(3.0, ge=0, le=1_000_000)
 
@@ -546,7 +549,7 @@ def _history(exchange: str, symbol: str, timeframe: str, since_ms: int, market=N
 
 def _simulate(f: StrategyFields, symbol: str, days: int, market=None) -> tuple[dict, list, Params]:
     """Backtest one market. Returns (result, closed candles, params)."""
-    p = Params(f.fast, f.slow, f.atr_period, f.atr_mult)
+    p = Params(f.fast, f.slow, f.atr_period, f.atr_mult, f.trend_filter, f.reentry, f.adx_min)
     tf_s = TIMEFRAMES[f.timeframe]
     if EXCHANGES[f.exchange]["kind"] == "stocks":
         warm_days = warmup_bars(p) / ALPACA_BARS_PER_DAY[f.timeframe] * 1.45 + 10

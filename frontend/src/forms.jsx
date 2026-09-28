@@ -8,7 +8,8 @@ import { LiveConfirm, Modal, useApp } from "./ui.jsx";
 export function toBody(v) {
   const out = { ...v };
   for (const k of ["fast", "slow", "atr_period", "days"]) if (k in out) out[k] = parseInt(out[k], 10);
-  for (const k of ["atr_mult", "trade_size", "daily_loss_cap"]) if (k in out) out[k] = parseFloat(out[k]);
+  for (const k of ["atr_mult", "trade_size", "daily_loss_cap", "adx_min"]) if (k in out) out[k] = parseFloat(out[k]) || 0;
+  for (const k of ["trend_filter", "reentry"]) if (k in out) out[k] = out[k] === true || out[k] === "true";
   if (out.symbol) out.symbol = out.symbol.trim().toUpperCase();
   if (typeof out.watchlist === "string")
     out.watchlist = out.watchlist.split(/[\s,;]+/).map(x => x.trim().toUpperCase()).filter(Boolean);
@@ -23,6 +24,12 @@ export function useFields(initial) {
     const value = e.target.value;
     setV(prev => {
       const next = { ...prev, [key]: value };
+      // Filter defaults that tested best for each candle size (5 years of Binance data):
+      // daily candles -> re-entry on, no ADX filter; 4h/1h -> ADX filter 20, no re-entry.
+      if (key === "timeframe") {
+        next.reentry = value === "1d";
+        next.adx_min = value === "1d" ? 0 : 20;
+      }
       if (key === "exchange") {
         const ex = meta.exchanges[value];
         if ((ex.kind === "stocks") === String(prev.symbol).includes("/")) next.symbol = ex.example;
@@ -76,8 +83,19 @@ export function AdvancedFields({ v, set }) {
         <label className="field">Stop distance <span className="hint">× ATR below the high</span>
           <input name="atr_mult" type="number" step="0.1" min="0.5" max="10" value={v.atr_mult} onChange={set("atr_mult")} required /></label>
       </div>
-      <p className="muted small" style={{ marginTop: 10 }}>Buys when the fast EMA crosses above the slow EMA. Sells when it crosses back below,
-        or when price drops to the trailing stop (highest price since buying minus the ATR multiple).</p>
+      <div className="form-grid" style={{ marginTop: 10 }}>
+        <label className="field">Trend strength (ADX) min <span className="hint">only buy in strong trends; 0 = off</span>
+          <input name="adx_min" type="number" min="0" max="60" step="1" value={v.adx_min ?? 0} onChange={set("adx_min")} /></label>
+      </div>
+      <label className="check"><input type="checkbox" name="trend_filter" checked={v.trend_filter !== false}
+        onChange={e => set("trend_filter")({ target: { value: e.target.checked } })} />
+        <span><b>Trend filter</b> - only buy while the price is above its 200-candle average (skips downtrends). Recommended.</span></label>
+      <label className="check"><input type="checkbox" name="reentry" checked={!!v.reentry}
+        onChange={e => set("reentry")({ target: { value: e.target.checked } })} />
+        <span><b>Re-entry on breakouts</b> - during an uptrend, buy again on a new 20-candle high (tested best on 1d candles).</span></label>
+      <p className="muted small" style={{ marginTop: 10 }}>Buys when the fast EMA crosses above the slow EMA (plus the filters above). Sells when it
+        crosses back below, or when price drops to the trailing stop (highest price since buying minus the ATR multiple).
+        Defaults are the combinations that did best in tests on 5 years of data for 8 major coins.</p>
     </details>
   );
 }
