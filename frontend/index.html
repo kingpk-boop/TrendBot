@@ -20,29 +20,53 @@
   <div id="root"><div id="boot" style="font:15px system-ui,sans-serif;text-align:center;padding:80px 20px;color:#8a929c">Loading TrendBot…</div></div>
   <noscript>TrendBot needs JavaScript enabled.</noscript>
   <script>
-    // Safety net: if the app hasn't started after a few seconds (old browser, stale cached copy, network
-    // problem), show a message and a reset button instead of a blank page.
+    // Safety net: if the app hasn't started after a while (a stale saved copy, a file that failed to
+    // download, an old browser), repair it automatically once; if that doesn't help, explain what to do.
     (function () {
       var errors = [];
-      window.addEventListener("error", function (e) { errors.push(e.message || String(e)); });
+      // Capture phase also catches files that fail to load (those errors don't reach normal handlers).
+      window.addEventListener("error", function (e) {
+        var t = e.target;
+        if (t && t !== window && (t.src || t.href)) errors.push("Couldn't load " + (t.src || t.href));
+        else errors.push(e.message || String(e));
+      }, true);
       window.addEventListener("unhandledrejection", function (e) { errors.push(String(e.reason)); });
-      window.tbReset = function () {
+      function clearSaved() {
         var jobs = [];
         try { if (navigator.serviceWorker) jobs.push(navigator.serviceWorker.getRegistrations().then(function (rs) { return Promise.all(rs.map(function (r) { return r.unregister(); })); })); } catch (e) {}
         try { if (window.caches) jobs.push(caches.keys().then(function (ks) { return Promise.all(ks.map(function (k) { return caches.delete(k); })); })); } catch (e) {}
-        Promise.all(jobs).then(function () { location.reload(); }, function () { location.reload(); });
-      };
-      setTimeout(function () {
-        if (window.__tbStarted) return;
-        var root = document.getElementById("root");
-        root.innerHTML = '<div style="font:15px system-ui,sans-serif;max-width:420px;margin:60px auto;padding:20px;text-align:center">' +
-          '<h2 style="margin:0 0 10px">TrendBot didn\'t start</h2>' +
-          '<p>Your browser may have an old copy of the site, or it may be too old. Try this first:</p>' +
-          '<button onclick="tbReset()" style="font:inherit;font-weight:600;padding:10px 18px;border-radius:8px;border:0;background:#2a78d6;color:#fff;cursor:pointer">Reset and reload</button>' +
-          '<p style="color:#8a929c;font-size:13px;margin-top:16px">Still blank? Update your browser (Chrome, Safari or Edge) and try again.</p>' +
+        return Promise.all(jobs).catch(function () {});
+      }
+      function freshReload() {
+        clearSaved().then(function () {
+          var url = location.pathname + "?fresh=" + Date.now() + location.hash;
+          location.replace(url);
+        });
+      }
+      window.tbReset = freshReload;
+      var tries = 0;
+      try { tries = +sessionStorage.getItem("tb-repair") || 0; } catch (e) {}
+      function check() {
+        if (window.__tbStarted) { try { sessionStorage.removeItem("tb-repair"); } catch (e) {} return; }
+        if (tries < 1) {  // first time: repair silently
+          try { sessionStorage.setItem("tb-repair", String(tries + 1)); } catch (e) {}
+          var boot = document.getElementById("boot");
+          if (boot) boot.textContent = "Updating TrendBot…";
+          freshReload();
+          return;
+        }
+        try { sessionStorage.removeItem("tb-repair"); } catch (e) {}
+        document.getElementById("root").innerHTML = '<div style="font:15px system-ui,sans-serif;max-width:440px;margin:60px auto;padding:20px;text-align:center">' +
+          '<h2 style="margin:0 0 10px">TrendBot couldn\'t start</h2>' +
+          '<p>The app didn\'t load in this browser. Check your internet connection, then:</p>' +
+          '<button onclick="tbReset()" style="font:inherit;font-weight:600;padding:10px 18px;border-radius:8px;border:0;background:#2a78d6;color:#fff;cursor:pointer">Try again</button>' +
+          '<p style="color:#8a929c;font-size:13px;margin-top:16px">Still stuck? Turn off ad-blockers or "tracking prevention" for this site, or open it in Chrome or Edge.</p>' +
           (errors.length ? '<pre style="text-align:left;white-space:pre-wrap;font-size:12px;color:#d23c3c">' + errors.join("\n").replace(/</g, "&lt;") + '</pre>' : '') +
           '</div>';
-      }, 8000);
+      }
+      // Wait for the page (and its app file) to finish loading, plus a grace period for slow devices.
+      function arm() { setTimeout(check, 6000); }
+      if (document.readyState === "complete") arm(); else window.addEventListener("load", arm);
     })();
   </script>
   <script type="module" src="/src/main.jsx"></script>

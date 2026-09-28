@@ -23,6 +23,7 @@ class ErrorBoundary extends Component {
 window.__tbStarted = true;
 createRoot(document.getElementById("root")).render(<StrictMode><ErrorBoundary><App /></ErrorBoundary></StrictMode>);
 
-if ("serviceWorker" in navigator && (location.protocol === "https:" || ["localhost", "127.0.0.1"].includes(location.hostname))) {
-  navigator.serviceWorker.register("sw.js").catch(() => { /* optional */ });
+// Remove any service worker left by older versions (they kept saved copies that could go stale).
+if ("serviceWorker" in navigator) {
+  navigator.serviceWorker.getRegistrations().then(rs => rs.forEach(r => r.unregister())).catch(() => {});
 }
