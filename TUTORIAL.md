@@ -75,9 +75,9 @@ time, never more than your max trade size per buy, a trailing stop on every posi
 the daily loss cap, and no buy below 60% confidence. If Claude is unreachable the bot holds and the stop
 keeps protecting the position.
 
-Models: every decision runs at high effort on Claude Opus 5.5 or Claude Opus 5 (they take turns and back each
-other up). Claude Sonnet 5 is used only for a decision where both Opus models are unavailable (usage or rate
-limits, overload); the next decision goes back to Opus. The bot page shows which model made each decision.
+Models: every decision runs at high effort on Claude Opus 5.5 or Claude Opus 5 only (they take turns and back
+each other up). If both are unavailable, the bot holds that round and tries again at the next candle; the
+trailing stop keeps protecting any position. The bot page shows which model made each decision.
 
 Cost: roughly 12 US cents of Anthropic usage per decision - about $2.90/day on 1h candles, $0.70/day on 4h,
 $0.12/day on 1d. Profit is never guaranteed: run it in paper mode first and read its decisions.
