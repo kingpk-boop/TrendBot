@@ -89,7 +89,7 @@ export function BotsPage() {
     <>
       <div className="page-head">
         <div className="grow"><h1>Your bots</h1>
-          <div className="muted small">Each bot trades one market with the EMA trend strategy. New bots start in paper mode (simulated money).</div></div>
+          <div className="muted small">AI Autopilot bots let Claude pick what to trade across a watchlist; rule bots follow the EMA trend strategy on one market. New bots start in paper mode (simulated money).</div></div>
         <div className="btn-row"><button className="btn primary" id="new-bot" onClick={() => openForm()}>+ New bot</button></div>
       </div>
       <div id="bot-list">{body}</div>
