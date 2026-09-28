@@ -85,7 +85,7 @@ $0.12/day on 1d. Profit is never guaranteed: run it in paper mode first and read
 ## 3. Make a paper bot (pretend money)
 
 1. In the PC app, go to **Bots → + New bot** (or **Create bot from these settings** after a backtest).
-2. Leave **Mode: Paper**. Trade size 20 and daily loss cap 10 are sensible starting values.
+2. Leave **Mode: Paper**. Trade size 5 and daily loss cap 3 are sensible starting values (exchanges need at least about $5 per order).
 3. Press **Create bot**, then **▶ Start**.
 
 What you'll see on the bot page:
