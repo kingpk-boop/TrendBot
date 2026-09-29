@@ -19,7 +19,12 @@ from .config import load_stored_secret, remove_account, save_account
 PRIMARY_MODELS = ("claude-opus-5-5", "claude-opus-5")
 MODEL = PRIMARY_MODELS[0]
 EFFORT = "high"
-MODEL_NAMES = {"claude-opus-5-5": "Claude Opus 5.5", "claude-opus-5": "Claude Opus 5"}
+MODEL_NAMES = {"claude-opus-5-5": "Claude Opus 5.5", "claude-opus-5": "Claude Opus 5", "claude-sonnet-5": "Claude Sonnet 5"}
+# AI Autopilot model choice per bot. "opus": best, ~12 US cents a decision. "sonnet": ~4x cheaper, still strong.
+TIERS = {
+    "opus": {"models": PRIMARY_MODELS, "effort": "high"},
+    "sonnet": {"models": ("claude-sonnet-5",), "effort": "medium"},
+}
 _turn = [0]  # which Opus model goes first next time (alternates)
 PROVIDER = "anthropic"  # key in data/accounts.json
 
@@ -40,7 +45,7 @@ def ai_key() -> tuple[str | None, str | None]:
 
 
 def ai_status() -> dict:
-    return {"source": ai_key()[1], "model": "Claude Opus 5.5 / Opus 5 (high effort)"}
+    return {"source": ai_key()[1], "model": "Claude Opus 5.5 / Opus 5 (high) or Sonnet 5 (medium), chosen per bot"}
 
 
 def _client(key: str | None = None) -> anthropic.Anthropic:
@@ -88,14 +93,14 @@ def _could_other_model_help(e: anthropic.APIError) -> bool:
     return isinstance(e, anthropic.APIStatusError) and e.status_code >= 500  # overloaded / server error
 
 
-def _run(make_request, budget_s: float = 280.0, turn: int | None = None):
+def _run(make_request, budget_s: float = 280.0, turn: int | None = None, models: tuple = PRIMARY_MODELS):
     """Run a request on the model chain. make_request(model) -> response.
     Returns (response, model). Opus 5.5 and Opus 5 alternate who goes first (by `turn` when given)."""
     if turn is None:
         turn = _turn[0]
         _turn[0] += 1
-    first = turn % 2
-    chain = [PRIMARY_MODELS[first], PRIMARY_MODELS[1 - first]]
+    first = turn % len(models)
+    chain = list(models[first:]) + list(models[:first])
     start, reasons = time.time(), []
     for model in chain:
         if reasons and time.time() - start > budget_s - 60:
@@ -111,7 +116,7 @@ def _run(make_request, budget_s: float = 280.0, turn: int | None = None):
             reasons.append(f"{MODEL_NAMES[model]} declined.")
             continue
         return response, model
-    raise AIError("Neither Claude Opus model was available right now. " + " ".join(reasons))
+    raise AIError("Claude wasn't available right now. " + " ".join(reasons))
 
 
 def connect(key: str) -> None:
@@ -207,8 +212,11 @@ How to decide - aim for the best risk-adjusted growth of the owner's money, not 
 Write "reason" in one to three plain sentences a beginner can follow, citing the numbers that drove the decision. Write "outlook" as one sentence on the watchlist overall. For "sell"/"hold" set symbol to the held market (or "" when in cash) and size_pct to 0; stop_atr is 0 unless you are tightening the stop."""
 
 
-def decide(context: dict, budget_s: float = 280.0, turn: int | None = None) -> tuple["TradeDecision", str]:
-    """Returns (decision, model id that made it). `turn` picks which Opus model goes first."""
+def decide(context: dict, budget_s: float = 280.0, turn: int | None = None,
+           tier: str = "opus") -> tuple["TradeDecision", str]:
+    """Returns (decision, model id that made it). `turn` picks which Opus model goes first; `tier` is the
+    bot's model choice (see TIERS)."""
+    t = TIERS.get(tier, TIERS["opus"])
     client = _client().with_options(timeout=min(170.0, budget_s - 30), max_retries=0)
     response, model = _run(lambda model: client.beta.messages.parse(
         model=model,
@@ -217,8 +225,8 @@ def decide(context: dict, budget_s: float = 280.0, turn: int | None = None) -> t
         messages=[{"role": "user", "content": "Current data (JSON):\n"
                    + json.dumps(context, separators=(",", ":"), default=str)}],
         output_format=TradeDecision,
-        output_config={"effort": EFFORT},
-    ), budget_s, turn)
+        output_config={"effort": t["effort"]},
+    ), budget_s, turn, t["models"])
     if response.stop_reason == "refusal" or response.parsed_output is None:
         raise AIError("The AI declined to decide this round.")
     d = response.parsed_output

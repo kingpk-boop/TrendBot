@@ -79,7 +79,12 @@ Models: every decision runs at high effort on Claude Opus 5.5 or Claude Opus 5 o
 each other up). If both are unavailable, the bot holds that round and tries again at the next candle; the
 trailing stop keeps protecting any position. The bot page shows which model made each decision.
 
-Cost: roughly 12 US cents of Anthropic usage per decision - about $2.90/day on 1h candles, $0.70/day on 4h,
+Cheaper and more active: in the bot form choose **AI model: Claude Sonnet 5** (about 3 US cents a decision)
+and **Check the market every: 3 minutes**. The bot then rescans all coins every 3 minutes for free and only
+asks Claude when something changed (a coin moved 1.5%+, the held coin 1%+, a buy signal appeared or went
+away, or 4 hours passed) - usually 10-40 times a day, about $0.30-1.20/day on Sonnet.
+
+Cost with Opus: roughly 12 US cents of Anthropic usage per decision - about $2.90/day on 1h candles, $0.70/day on 4h,
 $0.12/day on 1d. Profit is never guaranteed: run it in paper mode first and read its decisions.
 
 ## 2e. What makes the bots smarter (tested on real data)

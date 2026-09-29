@@ -539,8 +539,9 @@ class Bot:
             if stop_hit:
                 self._sell(f"Trailing stop hit (price {fmt(price)} at or below stop {fmt(stop)})")
 
-        # 2) Once per new candle: ask Claude what to do.
-        tf_ms = TIMEFRAMES[cfg["timeframe"]] * 1000
+        # 2) Once per new candle - or every N minutes when set - look at the market and ask Claude.
+        every_min = int(cfg.get("decide_every_min") or 0)
+        tf_ms = every_min * 60_000 if every_min else TIMEFRAMES[cfg["timeframe"]] * 1000
         candle = int(time.time() * 1000) // tf_ms * tf_ms
         last = self.state["last_candle"]
         if (last is not None and candle <= last) or (AI_DEADLINE[0] and time.time() > AI_DEADLINE[0]):
@@ -560,9 +561,17 @@ class Bot:
             with self.lock:
                 first = next(iter(snaps.values()))
                 self.runtime.update(price=first["close"], price_time=utc_now_iso())
+        if every_min and not self._worth_asking(snaps):
+            # Frequent checks only pay for Claude when the market actually changed since its last look.
+            with self.lock:
+                self.state["last_candle"] = candle
+                self.runtime["last_scan"] = utc_now_iso()
+            self.save()
+            return
         budget = CHECK_TIME_LIMIT - (time.time() - CHECK_STARTED[0]) if CHECK_STARTED[0] else 280.0
         try:
-            d, model = ai.decide(self._ai_round_context(snaps), budget_s=budget, turn=candle // tf_ms)
+            d, model = ai.decide(self._ai_round_context(snaps), budget_s=budget, turn=candle // tf_ms,
+                                 tier=cfg.get("ai_model") or "opus")
         except ai.AIError as exc:
             self.log(f"AI unavailable this round ({exc}). Holding; the stop still protects any position.", "warn")
             with self.lock:
@@ -575,10 +584,35 @@ class Bot:
                                 "confidence": d.confidence, "size_pct": d.size_pct, "stop_atr": d.stop_atr,
                                 "reason": d.reason, "outlook": d.outlook}
             self.state["last_candle"] = candle
+            self.state["ai_basis"] = {"closes": {sym: sn["close"] for sym, sn in snaps.items()},
+                                      "signals": sorted(sym for sym, sn in snaps.items()
+                                                        if sn["tested_rules"]["would_buy_now"])}
+            self.runtime["last_scan"] = utc_now_iso()
         self._apply_decision(d, snaps)
         if failed:
             self.log(f"Couldn't load {', '.join(failed)} this round; decided without them.", "warn")
         self.save()
+
+    def _worth_asking(self, snaps: dict) -> bool:
+        """Is there anything new for Claude since its last decision? (A coin moved 1.5%+, the held coin
+        1%+, a rule buy signal appeared or went away, or it's been 4 hours.)"""
+        basis, last = self.state.get("ai_basis"), self.state.get("ai") or {}
+        if not basis or not last.get("time"):
+            return True
+        if time.time() - datetime.fromisoformat(last["time"]).timestamp() >= 4 * 3600:
+            return True
+        closes = basis.get("closes", {})
+        pos = self.state.get("position")
+        held = (pos.get("symbol") or self.config["symbol"]) if pos else None
+        for sym, sn in snaps.items():
+            before = closes.get(sym)
+            if not before:
+                return True
+            move = abs(sn["close"] / before - 1)
+            if move >= 0.015 or (sym == held and move >= 0.01):
+                return True
+        signals = sorted(sym for sym, sn in snaps.items() if sn["tested_rules"]["would_buy_now"])
+        return signals != basis.get("signals", [])
 
     def _safe_snapshot(self, symbol: str):
         try:
@@ -680,8 +714,9 @@ class Bot:
             if is_ai(cfg):
                 status = (f"Holding {pos.get('symbol') or cfg['symbol']}. Claude reviews the watchlist at every new "
                           f"{cfg['timeframe']} candle; the trailing stop is checked every minute." if pos else
-                          f"In cash, watching {', '.join(bot_symbols(cfg))}. Claude decides at every new "
-                          f"{cfg['timeframe']} candle.")
+                          f"In cash, watching {', '.join(bot_symbols(cfg))}. " +
+                          (f"Scans every {cfg['decide_every_min']} min and asks Claude when something changes."
+                           if cfg.get("decide_every_min") else f"Claude decides at every new {cfg['timeframe']} candle."))
             elif pos:
                 status = "Holding. Sells on an EMA cross down or if price hits the trailing stop."
             elif ind and ind["fast"] > ind["slow"]:

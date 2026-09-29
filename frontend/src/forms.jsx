@@ -7,7 +7,7 @@ import { LiveConfirm, Modal, useApp } from "./ui.jsx";
 /** Turns form state into the numbers and upper-case symbol the API expects. */
 export function toBody(v) {
   const out = { ...v };
-  for (const k of ["fast", "slow", "atr_period", "days"]) if (k in out) out[k] = parseInt(out[k], 10);
+  for (const k of ["fast", "slow", "atr_period", "days", "decide_every_min"]) if (k in out) out[k] = parseInt(out[k], 10) || 0;
   for (const k of ["atr_mult", "trade_size", "daily_loss_cap", "adx_min"]) if (k in out) out[k] = parseFloat(out[k]) || 0;
   for (const k of ["trend_filter", "reentry"]) if (k in out) out[k] = out[k] === true || out[k] === "true";
   if (out.symbol) out.symbol = out.symbol.trim().toUpperCase();
@@ -42,9 +42,17 @@ export function useFields(initial) {
   return [v, set];
 }
 
-// Rough Claude cost per AI Autopilot decision (US$), for the hint in the form.
-const AI_COST_PER_DECISION = 0.12;
+// Rough Claude cost per AI Autopilot decision (US$), for the hints in the form.
+const AI_COST = { opus: 0.12, sonnet: 0.03 };
 const DECISIONS_PER_DAY = { "1h": 24, "4h": 6, "1d": 1 };
+
+function aiCostHint(v) {
+  const per = AI_COST[v.ai_model || "opus"];
+  const every = +v.decide_every_min || 0;
+  if (!every) return `≈ $${(per * (DECISIONS_PER_DAY[v.timeframe] || 1)).toFixed(2)}/day of Claude usage`;
+  // Frequent checks only ask Claude when prices moved or a signal changed: usually ~10-40 times a day.
+  return `≈ $${(per * 10).toFixed(2)}-${(per * 40).toFixed(2)}/day (Claude is asked only when the market moves)`;
+}
 
 export function StrategyFields({ v, set, ai = false }) {
   const { meta } = useApp();
@@ -66,8 +74,21 @@ export function StrategyFields({ v, set, ai = false }) {
           <option value="balanced">Balanced - good setups, no chasing</option>
           <option value="aggressive">Aggressive - trades more, more risk</option>
         </select></label>}
-      <label className="field">{ai ? "Decide every" : "Candle size"}
-        {ai && <span className="hint">≈ ${(AI_COST_PER_DECISION * (DECISIONS_PER_DAY[v.timeframe] || 1)).toFixed(2)}/day of Claude usage</span>}
+      {ai && <label className="field">AI model
+        <select name="ai_model" value={v.ai_model || "opus"} onChange={set("ai_model")}>
+          <option value="sonnet">Claude Sonnet 5 - smart, ~3¢ a decision</option>
+          <option value="opus">Claude Opus 5.5 / 5 (high) - best, ~12¢ a decision</option>
+        </select></label>}
+      {ai && <label className="field">Check the market every <span className="hint">{aiCostHint(v)}</span>
+        <select name="decide_every_min" value={String(v.decide_every_min ?? 0)} onChange={set("decide_every_min")}>
+          <option value="3">3 minutes (asks Claude only when something changed)</option>
+          <option value="5">5 minutes (only when something changed)</option>
+          <option value="15">15 minutes (only when something changed)</option>
+          <option value="30">30 minutes (only when something changed)</option>
+          <option value="60">1 hour (only when something changed)</option>
+          <option value="0">Each new candle (always asks Claude)</option>
+        </select></label>}
+      <label className="field">Candle size {ai && <span className="hint">the chart period Claude studies</span>}
         <select name="timeframe" value={v.timeframe} onChange={set("timeframe")}>
           {meta.timeframes.map(t => <option key={t}>{t}</option>)}
         </select></label>
