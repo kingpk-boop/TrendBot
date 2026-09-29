@@ -31,5 +31,5 @@ jobs:
             code=$(curl -sS -o out.txt -w '%{http_code}' --max-time 290 \
               -H "Authorization: Bearer $TOKEN" "$SITE/api/cron/tick" || echo "000")
             echo "check $i: HTTP $code $(head -c 200 out.txt)"
-            [ "$i" -lt 5 ] && sleep 60
+            if [ "$i" -lt 5 ]; then sleep 60; fi
           done
