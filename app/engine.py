@@ -594,12 +594,14 @@ class Bot:
         self.save()
 
     def _worth_asking(self, snaps: dict) -> bool:
-        """Is there anything new for Claude since its last decision? (A coin moved 1.5%+, the held coin
-        1%+, a rule buy signal appeared or went away, or it's been 4 hours.)"""
+        """Is there anything new for Claude since its last decision? A coin moved 1.5%+, the held coin 1%+,
+        a rule buy signal appeared or went away, or 4 hours passed (aggressive: 0.75%, 0.5%, 1 hour)."""
         basis, last = self.state.get("ai_basis"), self.state.get("ai") or {}
         if not basis or not last.get("time"):
             return True
-        if time.time() - datetime.fromisoformat(last["time"]).timestamp() >= 4 * 3600:
+        bold = style_of(self.config) == "aggressive"
+        move_trigger, held_trigger, heartbeat = (0.0075, 0.005, 3600) if bold else (0.015, 0.01, 4 * 3600)
+        if time.time() - datetime.fromisoformat(last["time"]).timestamp() >= heartbeat:
             return True
         closes = basis.get("closes", {})
         pos = self.state.get("position")
@@ -609,7 +611,7 @@ class Bot:
             if not before:
                 return True
             move = abs(sn["close"] / before - 1)
-            if move >= 0.015 or (sym == held and move >= 0.01):
+            if move >= move_trigger or (sym == held and move >= held_trigger):
                 return True
         signals = sorted(sym for sym, sn in snaps.items() if sn["tested_rules"]["would_buy_now"])
         return signals != basis.get("signals", [])
@@ -680,6 +682,35 @@ class Bot:
     def active_symbol(self) -> str:
         pos = self.state.get("position")
         return (pos.get("symbol") if pos else None) or self.config["symbol"]
+
+    def buy_now(self, symbol: str, amount: float) -> None:
+        """Manual 'buy now' from the UI. The bot then manages the position (trailing stop, exits)."""
+        cfg = self.config
+        symbol = symbol.strip().upper()
+        if symbol not in bot_symbols(cfg):
+            raise MarketError(f"{symbol} isn't one of this bot's markets.")
+        if amount <= 0 or amount > float(cfg["trade_size"]) + 1e-9:
+            raise MarketError(f"Pick an amount up to this bot's max trade size ({fmt(float(cfg['trade_size']))}).")
+        with self.op_lock:
+            if self.state["position"]:
+                raise MarketError(f"This bot already holds {self.active_symbol()}. Sell it first.")
+            if self.broker is None:
+                self._connect()
+            if not self.market.market_open():
+                raise MarketError("The stock market is closed - try again when it opens.")
+            minimum = self.market.min_order(symbol) if hasattr(self.market, "min_order") else 0
+            if minimum and amount < minimum:
+                raise MarketError(f"The exchange's minimum order for {symbol} is {fmt(minimum)}.")
+            tf_ms = TIMEFRAMES[cfg["timeframe"]] * 1000
+            now_ms = int(time.time() * 1000)
+            candles = [c for c in self.market.fetch_candles(symbol, cfg["timeframe"], limit=100) if c[0] + tf_ms <= now_ms]
+            if len(candles) < 20:
+                raise MarketError(f"Not enough price history for {symbol}.")
+            p = Params.from_config(cfg)
+            atr_now = compute(candles, Params(atr_period=p.atr_period, trend_filter=False))["atr"][-1]
+            self._buy(atr_now, p, "Manual buy", symbol=symbol, quote=amount,
+                      stop_mult=p.atr_mult if not is_ai(cfg) else 3.0)
+            self._clear_error()
 
     def close_now(self) -> None:
         """Manual 'sell now' from the UI."""
