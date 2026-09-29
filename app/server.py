@@ -471,6 +471,19 @@ def stop_bot(bot_id: str):
     return bot.summary()
 
 
+class BuyIn(BaseModel):
+    symbol: str = Field(min_length=1, max_length=24)
+    amount: float = Field(gt=0, le=1_000_000)
+
+
+@app.post("/api/bots/{bot_id}/buy")
+@managed(write=True)
+def buy_now(bot_id: str, body: BuyIn):
+    bot = manager.get(bot_id)
+    bot.buy_now(body.symbol, body.amount)
+    return bot.summary()
+
+
 @app.post("/api/bots/{bot_id}/close")
 @managed(write=True)
 def close_position(bot_id: str):

@@ -4,7 +4,40 @@ import { api } from "../api.js";
 import { candleIndex } from "../chart.js";
 import { ago, cls, exchangeLabel, fmtNum, fmtPrice, fmtQty, fmtTime, pct, quoteOf, signed } from "../format.js";
 import { BotForm } from "../forms.jsx";
-import { AIReview, ChartView, FinishSetup, Legend, ModeBadge, Spinner, Tile, useApp, usePolling } from "../ui.jsx";
+import { AIReview, ChartView, FinishSetup, Legend, Modal, ModeBadge, Spinner, Tile, useApp, usePolling } from "../ui.jsx";
+
+/** "Buy now": pick a market and amount; resolves with {symbol, amount} or nothing when cancelled. */
+function BuyDialog({ bot, close }) {
+  const { meta } = useApp();
+  const c = bot.config, q = quoteOf(meta, c);
+  const markets = c.brain === "ai" ? (c.watchlist || [c.symbol]) : [c.symbol];
+  const [symbol, setSymbol] = useState(markets[0]);
+  const [amount, setAmount] = useState(String(c.trade_size));
+  const n = parseFloat(amount);
+  const ok = n > 0 && n <= c.trade_size;
+  const money = c.mode === "paper" ? "Paper trade - no real money." : c.mode === "live" ? "This spends REAL money on your account." : "This uses your testnet account.";
+  return (
+    <Modal onClose={() => close()}>
+      <form onSubmit={e => { e.preventDefault(); if (ok) close({ symbol, amount: n }); }}>
+        <div className="dlg-head"><h2>Buy now</h2></div>
+        <div className="dlg-body">
+          <div className="form-grid">
+            <label className="field">Market
+              <select value={symbol} onChange={e => setSymbol(e.target.value)}>{markets.map(m => <option key={m}>{m}</option>)}</select></label>
+            <label className="field">Amount ({q}) <span className="hint">up to {fmtNum(c.trade_size)}</span>
+              <input type="number" step="any" min="0" max={c.trade_size} value={amount} onChange={e => setAmount(e.target.value)} autoFocus /></label>
+          </div>
+          <p className="small" style={{ marginBottom: 0 }}>Buys at the market price. The bot then manages it like its own trades: a trailing stop
+            checked every minute{c.brain === "ai" ? ", and Claude can hold, tighten the stop or sell" : " and the strategy's exit rules"}. <b>{money}</b></p>
+        </div>
+        <div className="dlg-foot">
+          <button type="button" className="btn" onClick={() => close()}>Cancel</button>
+          <button type="submit" className={"btn " + (c.mode === "live" ? "danger-solid" : "primary")} disabled={!ok}>Buy {symbol}</button>
+        </div>
+      </form>
+    </Modal>
+  );
+}
 
 /** Opens the bot form and goes to the saved bot. */
 export function useOpenBotForm() {
@@ -158,6 +191,11 @@ export function BotPage({ id }) {
 
   const act = async name => {
     if (name === "edit") return openForm(bot);
+    let body;
+    if (name === "buy") {
+      body = await modal.open(cl => <BuyDialog bot={bot} close={cl} />);
+      if (!body) return;
+    }
     if (name === "delete" && !(await modal.confirm({ title: "Delete bot?", text: `Delete "${c.name}" and its trade history? This can't be undone.`, okLabel: "Delete", danger: true }))) return;
     if (name === "close") {
       const real = c.mode === "paper" ? "(paper trade - no real money)" : c.mode === "live" ? "This sells REAL coins/shares at the market price." : "This sells on your testnet account.";
@@ -173,8 +211,8 @@ export function BotPage({ id }) {
         location.hash = "#/bots";
         return;
       }
-      await api(`/bots/${encodeURIComponent(id)}/${name}`, { method: "POST" });
-      toast({ start: "Bot started.", stop: "Bot stopped.", close: "Position sold." }[name]);
+      await api(`/bots/${encodeURIComponent(id)}/${name}`, { method: "POST", body });
+      toast({ start: "Bot started.", stop: "Bot stopped.", close: "Position sold.", buy: "Bought." }[name]);
       await load();
     } catch (err) {
       toast(err.message, true);
@@ -198,7 +236,7 @@ export function BotPage({ id }) {
           : <div className="muted small">{c.symbol} on {exLabel} · {c.timeframe} candles · EMA {c.fast}/{c.slow} · stop {c.atr_mult}× ATR({c.atr_period}) · {fmtNum(c.trade_size)} {q} per trade · daily loss cap {c.daily_loss_cap > 0 ? `${fmtNum(c.daily_loss_cap)} ${q}` : "off"}</div>}</div>
         <div className="btn-row" id="bot-actions">
           {bot.running ? btn("stop", "■ Stop") : btn("start", "▶ Start", "go")}
-          {pos && btn("close", "Sell now", "danger")}
+          {pos ? btn("close", "Sell now", "danger") : btn("buy", "Buy now")}
           {btn("edit", "Edit", "", bot.running, bot.running ? "Stop the bot to edit it" : undefined)}
           {btn("delete", "Delete", "danger", bot.running || !!pos, bot.running || pos ? "Stop the bot and close its position first" : undefined)}
         </div>
