@@ -152,7 +152,8 @@ function TimerCard() {
     try { setInfo(await api("/cron/info")); setError(""); } catch (e) { setError(e.message); }
   }, 30000);
   const lastMs = info?.last_run ? Date.parse(info.last_run) : null;
-  const healthy = lastMs && Date.now() - lastMs < 3 * 60 * 1000;
+  // GitHub's scheduler can start runs late, so allow some slack before calling the timer stopped.
+  const healthy = lastMs && Date.now() - lastMs < 20 * 60 * 1000;
   const copy = async () => {
     try { await navigator.clipboard.writeText(info.url); toast("Link copied."); } catch { toast("Select the link and copy it.", true); }
   };
@@ -164,8 +165,8 @@ function TimerCard() {
       {error && <div className="alert error" style={{ margin: 0 }}>{error}</div>}
       {info && <>
         <p className="small" style={{ marginTop: 0 }}>{healthy
-          ? <>Your bots are checked every minute. Last check: <b>{ago(info.last_run)}</b>.</>
-          : <>Bots only trade when something wakes this website every minute. {lastMs ? <>Last check was <b>{ago(info.last_run)}</b>.</> : "It hasn't run yet."} Set up the free timer:</>}</p>
+          ? <>Your bots are checked about every minute by the <b>Bot timer</b> workflow in your GitHub repository (free, automatic). Last check: <b>{ago(info.last_run)}</b>.</>
+          : <>Bots only trade when something wakes this website. The <b>Bot timer</b> workflow in your GitHub repository does this automatically; if it isn't running, check the repository's <b>Actions</b> tab. {lastMs ? <>Last check was <b>{ago(info.last_run)}</b>.</> : "It hasn't run yet."} As a backup you can also use a free external timer:</>}</p>
         {!healthy && <ol className="small" style={{ paddingLeft: 18 }}>
           <li>Make a free account at <a href="https://cron-job.org/en/signup/" target="_blank" rel="noopener">cron-job.org ↗</a>.</li>
           <li>Click <b>Create cronjob</b>. Title: <i>TrendBot</i>. URL: paste the link below. Schedule: <b>Every minute</b>. Save.</li>

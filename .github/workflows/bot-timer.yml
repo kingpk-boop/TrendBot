@@ -1,0 +1,35 @@
+# Runs the TrendBot website's bot timer around the clock: every minute, each run makes 5 checks a minute
+# apart. It proves it comes from this repository with GitHub's signed OIDC token, so no secret is needed.
+# (GitHub starts scheduled runs every 5 minutes at best and sometimes late; runs overlap slightly to cover gaps.)
+name: Bot timer
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+
+permissions:
+  id-token: write   # lets the run ask GitHub for its signed identity token
+  contents: read
+
+concurrency:
+  group: bot-timer
+  cancel-in-progress: false
+
+jobs:
+  tick:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    env:
+      SITE: https://trendbot-six.vercel.app
+    steps:
+      - name: Check the bots every minute
+        run: |
+          for i in 1 2 3 4 5; do
+            TOKEN=$(curl -sS -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+              "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=trendbot-timer" | jq -r .value)
+            code=$(curl -sS -o out.txt -w '%{http_code}' --max-time 290 \
+              -H "Authorization: Bearer $TOKEN" "$SITE/api/cron/tick" || echo "000")
+            echo "check $i: HTTP $code $(head -c 200 out.txt)"
+            [ "$i" -lt 5 ] && sleep 60
+          done
