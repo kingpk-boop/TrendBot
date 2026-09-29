@@ -30,7 +30,21 @@ MAX_LOG = 300
 
 MAX_TRADES = 5000
 DUST_USD = 1.0  # a leftover worth less than this after a sell counts as fully closed
-AI_MIN_CONFIDENCE = 60  # AI Autopilot buys below this confidence are not executed
+# AI Autopilot trading styles: the owner's appetite for risk. Buys below the style's confidence aren't executed.
+STYLES = {
+    "careful": {"min_confidence": 70, "brief": "Careful: only the clearest, strongest setups; smaller size when "
+                "anything is mixed; cut losers quickly. Holding cash for days is fine."},
+    "balanced": {"min_confidence": 60, "brief": "Balanced: trade good setups, wait for pullbacks rather than "
+                 "chasing, size by conviction."},
+    "aggressive": {"min_confidence": 52, "brief": "Aggressive: the owner wants more trades and accepts more risk. "
+                   "Take reasonable setups instead of waiting for perfect ones; strong momentum leaders may be "
+                   "bought even when stretched, but then use a tighter stop (1.5-2.5 ATR) and a smaller size; "
+                   "rotate faster into the strongest market. Still never buy markets in clear downtrends."},
+}
+
+
+def style_of(cfg: dict) -> str:
+    return cfg.get("style") if cfg.get("style") in STYLES else "balanced"
 # On the website one scheduled check must finish within the server's time limit; AI decisions that
 # would start after this deadline wait for the next minute's check instead.
 AI_DEADLINE: list[float | None] = [None]
@@ -495,6 +509,8 @@ class Bot:
                      "new_buys_allowed": not (cap > 0 and today <= -cap)},
             "your_previous_decision": last, "recent_trades": recent,
             "your_track_record_by_market": record, "market_breadth": breadth,
+            "owner_trading_style": STYLES[style_of(cfg)]["brief"],
+            "min_confidence_to_buy": STYLES[style_of(cfg)]["min_confidence"],
             "watchlist": [dict((k, v) for k, v in s.items() if k != "atr") for s in snaps.values()],
         }
 
@@ -592,8 +608,9 @@ class Bot:
         if d.symbol not in snaps:
             self.log(f"{label} - ignored: {d.symbol or 'that market'} isn't on the watchlist.", "warn")
             return
-        if d.confidence < AI_MIN_CONFIDENCE:
-            self.log(f"{label} - not executed: below the {AI_MIN_CONFIDENCE}% confidence needed to buy.", "warn")
+        need = STYLES[style_of(cfg)]["min_confidence"]
+        if d.confidence < need:
+            self.log(f"{label} - not executed: below the {need}% confidence needed to buy.", "warn")
             return
         cap, today = float(cfg["daily_loss_cap"]), self.today_pnl()
         if cap > 0 and today <= -cap:
