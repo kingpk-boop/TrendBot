@@ -23,6 +23,7 @@ from .config import (BACKTEST_ONLY, DATA_DIR, EXCHANGES, MODES, POLL_SECONDS, TI
                      keys_status, load_dotenv, remove_account, save_account)
 from .engine import BotManager, BotNotFound
 from .store import CLOUD, StoreError, store
+from . import github_timer
 from .exchanges import ALPACA_BARS_PER_DAY, MarketError, make_market, verify_account
 from .strategy import Params, backtest, compute, entry_signal, warmup_bars
 
@@ -396,7 +397,10 @@ def cron_tick(request: Request, key: str = ""):
     if not CLOUD:
         raise HTTPException(404, "Only used by the website version.")
     supplied = key or request.headers.get("authorization", "").removeprefix("Bearer ").strip()
-    if not CRON_SECRET or not hmac.compare_digest(supplied, CRON_SECRET):
+    ok = bool(CRON_SECRET) and hmac.compare_digest(supplied, CRON_SECRET)
+    if not ok and supplied.count(".") == 2:  # a GitHub Actions timer in this app's repository (no secret needed)
+        ok = github_timer.verify(supplied)
+    if not ok:
         raise HTTPException(401, "Wrong or missing key.")
     return manager.cron_tick()
 
