@@ -241,6 +241,7 @@ class BotConfigIn(StrategyFields):
     name: str = Field("", max_length=40)
     mode: str = "paper"
     brain: str = "ai"  # "ai" = Claude decides (AI Autopilot); "rules" = EMA crossover rules
+    style: str = "balanced"  # AI Autopilot: careful | balanced | aggressive
     watchlist: list[str] = Field(default_factory=list, max_length=8)  # markets the AI Autopilot may trade
     ai_filter: bool = False  # rules bots: ask the AI to approve each buy signal
     confirm_live: bool = False
@@ -251,6 +252,8 @@ class BotConfigIn(StrategyFields):
             raise ValueError(f"mode must be one of {', '.join(MODES)}")
         if self.brain not in ("ai", "rules"):
             raise ValueError("brain must be 'ai' or 'rules'")
+        if self.style not in ("careful", "balanced", "aggressive"):
+            raise ValueError("style must be careful, balanced or aggressive")
         if self.brain == "ai":
             kind = EXCHANGES[self.exchange]["kind"]
             pattern = r"[A-Z0-9]{2,12}/[A-Z0-9]{2,12}" if kind == "crypto" else r"[A-Z][A-Z.]{0,9}"

@@ -194,7 +194,7 @@ export function BotPage({ id }) {
         <div className="grow"><h1 id="bot-title">{c.name} <ModeBadge mode={c.mode} exchange={c.exchange} />{c.brain === "ai"
           ? <> <span className="badge ai" title="Claude makes the trading decisions">AI Autopilot</span></>
           : c.ai_filter && <> <span className="badge ai" title="AI checks each buy">AI check</span></>}</h1>
-          {c.brain === "ai" ? <div className="muted small">Watching {(c.watchlist || [c.symbol]).join(", ")} on {exLabel} · decides every {c.timeframe} · up to {fmtNum(c.trade_size)} {q} per buy · daily loss cap {c.daily_loss_cap > 0 ? `${fmtNum(c.daily_loss_cap)} ${q}` : "off"}</div>
+          {c.brain === "ai" ? <div className="muted small">Watching {(c.watchlist || [c.symbol]).join(", ")} on {exLabel} · {c.style || "balanced"} style · decides every {c.timeframe} · up to {fmtNum(c.trade_size)} {q} per buy · daily loss cap {c.daily_loss_cap > 0 ? `${fmtNum(c.daily_loss_cap)} ${q}` : "off"}</div>
           : <div className="muted small">{c.symbol} on {exLabel} · {c.timeframe} candles · EMA {c.fast}/{c.slow} · stop {c.atr_mult}× ATR({c.atr_period}) · {fmtNum(c.trade_size)} {q} per trade · daily loss cap {c.daily_loss_cap > 0 ? `${fmtNum(c.daily_loss_cap)} ${q}` : "off"}</div>}</div>
         <div className="btn-row" id="bot-actions">
           {bot.running ? btn("stop", "■ Stop") : btn("start", "▶ Start", "go")}

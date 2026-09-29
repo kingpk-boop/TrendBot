@@ -60,6 +60,12 @@ export function StrategyFields({ v, set, ai = false }) {
         : <label className="field">Symbol
           <input name="symbol" value={v.symbol} onChange={set("symbol")} required maxLength={24} autoCapitalize="characters"
             spellCheck="false" placeholder={meta.exchanges[v.exchange]?.example || "BTC/USDT"} /></label>}
+      {ai && <label className="field">Trading style <span className="hint">how bold Claude is; limits stay the same</span>
+        <select name="style" value={v.style || "balanced"} onChange={set("style")}>
+          <option value="careful">Careful - only the clearest setups</option>
+          <option value="balanced">Balanced - good setups, no chasing</option>
+          <option value="aggressive">Aggressive - trades more, more risk</option>
+        </select></label>}
       <label className="field">{ai ? "Decide every" : "Candle size"}
         {ai && <span className="hint">≈ ${(AI_COST_PER_DECISION * (DECISIONS_PER_DAY[v.timeframe] || 1)).toFixed(2)}/day of Claude usage</span>}
         <select name="timeframe" value={v.timeframe} onChange={set("timeframe")}>
