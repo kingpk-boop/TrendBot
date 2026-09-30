@@ -1,5 +1,6 @@
 """HTTP API + static web app."""
 import asyncio
+from datetime import datetime, timezone
 import functools
 import hashlib
 import hmac
@@ -411,6 +412,18 @@ def cron_tick(request: Request, key: str = ""):
         ok = github_timer.verify(supplied)
     if not ok:
         raise HTTPException(401, "Wrong or missing key.")
+    return manager.cron_tick()
+
+
+@app.post("/api/cron/check")
+def cron_check():
+    """For the logged-in owner: while the website is open in a browser, it runs the bot check about once a
+    minute itself (a backup for when the scheduler is late). Skipped if a check ran in the last 45 s."""
+    if not CLOUD:
+        raise HTTPException(404, "Only used by the website version.")
+    last = store.cmd("GET", "trendbot:cron_last")
+    if last and (datetime.now(timezone.utc) - datetime.fromisoformat(last)).total_seconds() < 45:
+        return {"ok": True, "skipped": True, "time": last}
     return manager.cron_tick()
 
 
