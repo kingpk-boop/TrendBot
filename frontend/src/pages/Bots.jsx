@@ -6,6 +6,37 @@ import { ago, cls, exchangeLabel, fmtNum, fmtPrice, fmtQty, fmtTime, pct, quoteO
 import { BotForm } from "../forms.jsx";
 import { AIReview, ChartView, FinishSetup, Legend, Modal, ModeBadge, Spinner, Tile, useApp, usePolling } from "../ui.jsx";
 
+/** "Hold for profit": resolves with {hold, take_profit_pct, stop_atr} or nothing when cancelled. */
+function HoldDialog({ bot, close }) {
+  const pos = bot.position;
+  const [target, setTarget] = useState("10");
+  const [width, setWidth] = useState("6");
+  const t = parseFloat(target) || 0, w = parseFloat(width) || 6;
+  return (
+    <Modal onClose={() => close()}>
+      <form onSubmit={e => { e.preventDefault(); close({ hold: true, take_profit_pct: t, stop_atr: w }); }}>
+        <div className="dlg-head"><h2>Hold {bot.active_symbol} for profit</h2></div>
+        <div className="dlg-body">
+          <p className="small" style={{ marginTop: 0 }}>The bot keeps this coin through dips: Claude and the strategy won't sell or switch it.
+            It sells only at your profit target or if the price falls to a wide safety stop.</p>
+          <div className="form-grid">
+            <label className="field">Profit target (%) <span className="hint">sell at +this % from {fmtPrice(pos.entry_price)}; 0 = none</span>
+              <input type="number" min="0" step="any" value={target} onChange={e => setTarget(e.target.value)} autoFocus /></label>
+            <label className="field">Safety stop width <span className="hint">× ATR below the highest price; 4-8 is wide</span>
+              <input type="number" min="2" max="12" step="0.5" value={width} onChange={e => setWidth(e.target.value)} /></label>
+          </div>
+          {t > 0 && <p className="small">Sells at about <b>{fmtPrice(pos.entry_price * (1 + t / 100))}</b> or above.</p>}
+          <p className="muted small" style={{ marginBottom: 0 }}>Keep the bot running so the target and safety stop are watched. You can turn Hold off any time.</p>
+        </div>
+        <div className="dlg-foot">
+          <button type="button" className="btn" onClick={() => close()}>Cancel</button>
+          <button type="submit" className="btn primary">Hold for profit</button>
+        </div>
+      </form>
+    </Modal>
+  );
+}
+
 /** "Buy now": pick a market and amount; resolves with {symbol, amount} or nothing when cancelled. */
 function BuyDialog({ bot, close }) {
   const { meta } = useApp();
@@ -196,6 +227,13 @@ export function BotPage({ id }) {
       body = await modal.open(cl => <BuyDialog bot={bot} close={cl} />);
       if (!body) return;
     }
+    if (name === "hold") {
+      if (pos?.hold) body = { hold: false };
+      else {
+        body = await modal.open(cl => <HoldDialog bot={bot} close={cl} />);
+        if (!body) return;
+      }
+    }
     if (name === "delete" && !(await modal.confirm({ title: "Delete bot?", text: `Delete "${c.name}" and its trade history? This can't be undone.`, okLabel: "Delete", danger: true }))) return;
     if (name === "close") {
       const real = c.mode === "paper" ? "(paper trade - no real money)" : c.mode === "live" ? "This sells REAL coins/shares at the market price." : "This sells on your testnet account.";
@@ -212,7 +250,7 @@ export function BotPage({ id }) {
         return;
       }
       await api(`/bots/${encodeURIComponent(id)}/${name}`, { method: "POST", body });
-      toast({ start: "Bot started.", stop: "Bot stopped.", close: "Position sold.", buy: "Bought." }[name]);
+      toast({ start: "Bot started.", stop: "Bot stopped.", close: "Position sold.", buy: "Bought.", hold: body?.hold ? "Holding for profit." : "Back to normal management." }[name]);
       await load();
     } catch (err) {
       toast(err.message, true);
@@ -236,6 +274,7 @@ export function BotPage({ id }) {
           : <div className="muted small">{c.symbol} on {exLabel} · {c.timeframe} candles · EMA {c.fast}/{c.slow} · stop {c.atr_mult}× ATR({c.atr_period}) · {fmtNum(c.trade_size)} {q} per trade · daily loss cap {c.daily_loss_cap > 0 ? `${fmtNum(c.daily_loss_cap)} ${q}` : "off"}</div>}</div>
         <div className="btn-row" id="bot-actions">
           {bot.running ? btn("stop", "■ Stop") : btn("start", "▶ Start", "go")}
+          {pos && btn("hold", pos.hold ? "Stop holding" : "Hold for profit")}
           {pos ? btn("close", "Sell now", "danger") : btn("buy", "Buy now")}
           {btn("edit", "Edit", "", bot.running, bot.running ? "Stop the bot to edit it" : undefined)}
           {btn("delete", "Delete", "danger", bot.running || !!pos, bot.running || pos ? "Stop the bot and close its position first" : undefined)}
@@ -256,7 +295,7 @@ export function BotPage({ id }) {
           : <Tile label="Trend (EMA)" value={!ind ? "—" : ind.fast > ind.slow ? "Up" : "Down"}
             sub={ind ? `fast ${fmtPrice(ind.fast)} / slow ${fmtPrice(ind.slow)}` : "after first candle"} />}
         <Tile label="Position" value={pos ? `${fmtQty(pos.qty)}${c.brain === "ai" && pos.symbol ? " " + pos.symbol.split("/")[0] : ""}` : "None"}
-          sub={pos ? `bought at ${fmtPrice(pos.entry_price)}` : c.brain === "ai" ? "in cash" : "waiting for a buy signal"} />
+          sub={pos ? `bought at ${fmtPrice(pos.entry_price)}${pos.hold ? " · holding for profit" + (pos.take_profit ? ` → ${fmtPrice(pos.take_profit)}` : "") : ""}` : c.brain === "ai" ? "in cash" : "waiting for a buy signal"} />
         <Tile label="Trailing stop" value={pos ? fmtPrice(pos.stop) : "—"}
           sub={pos && bot.price ? `${fmtNum((bot.price / pos.stop - 1) * 100, 1)}% below price` : ""} />
         <Tile label="Open P&L" value={<span className={cls(bot.unrealized)}>{signed(bot.unrealized)}</span>} sub={pos ? q + " after sell fee" : ""} />
