@@ -268,6 +268,8 @@ class Bot:
                 stop = pos["stop"]
         if stop_hit:
             self._sell(f"Trailing stop hit (price {fmt(price)} at or below stop {fmt(stop)})")
+        else:
+            self._check_profit_target(price)
 
         # 2) Signals - only once a new candle has closed.
         tf_ms = TIMEFRAMES[tf] * 1000
@@ -291,7 +293,7 @@ class Bot:
             self.state["indicators"] = {"fast": ind_all["fast"][i], "slow": ind_all["slow"][i],
                                         "atr": ind_all["atr"][i], "candle": ts, "close": closed[i][4]}
             pos = self.state["position"]
-        if pos and exit_signal(ind_all, i):
+        if pos and exit_signal(ind_all, i) and not pos.get("hold"):
             self._sell("EMA cross down")
         elif not pos and entry_signal(ind_all, i):
             cap = float(cfg["daily_loss_cap"])
@@ -538,6 +540,11 @@ class Bot:
                 stop, stop_hit = pos["stop"], price <= pos["stop"]
             if stop_hit:
                 self._sell(f"Trailing stop hit (price {fmt(price)} at or below stop {fmt(stop)})")
+            else:
+                self._check_profit_target(price)
+        if (self.state["position"] or {}).get("hold"):
+            self.save()
+            return  # "Hold for profit": the owner keeps this position; no need to ask Claude
 
         # 2) Once per new candle - or every N minutes when set - look at the market and ask Claude.
         every_min = int(cfg.get("decide_every_min") or 0)
@@ -683,6 +690,47 @@ class Bot:
         pos = self.state.get("position")
         return (pos.get("symbol") if pos else None) or self.config["symbol"]
 
+    def _check_profit_target(self, price: float) -> None:
+        with self.lock:
+            pos = self.state["position"]
+            target = pos.get("take_profit") if pos else None
+        if target and price >= target:
+            self._sell(f"Profit target reached (price {fmt(price)} at or above {fmt(target)})")
+
+    def set_hold(self, hold: bool, take_profit_pct: float = 0.0, stop_atr: float = 6.0) -> None:
+        """'Hold for profit': keep the position through dips - no AI sells or switches, no rule exits - with
+        an optional profit target and a wide safety stop. Turning it off hands the position back to the bot."""
+        with self.op_lock:
+            with self.lock:
+                pos = self.state["position"]
+                if not pos:
+                    raise MarketError("This bot doesn't hold anything right now.")
+                symbol = pos.get("symbol") or self.config["symbol"]
+                atr_now = pos.get("atr")
+            if hold and not atr_now:
+                if self.market is None:
+                    self._connect()
+                tf_ms = TIMEFRAMES[self.config["timeframe"]] * 1000
+                now_ms = int(time.time() * 1000)
+                candles = [c for c in self.market.fetch_candles(symbol, self.config["timeframe"], limit=100)
+                           if c[0] + tf_ms <= now_ms]
+                atr_now = compute(candles, Params(trend_filter=False))["atr"][-1]
+            with self.lock:
+                pos = self.state["position"]
+                if hold:
+                    stop_atr = max(2.0, min(12.0, float(stop_atr)))
+                    pos.update(hold=True, atr=atr_now, stop_mult=stop_atr, stop=pos["high"] - stop_atr * atr_now,
+                               take_profit=pos["entry_price"] * (1 + take_profit_pct / 100) if take_profit_pct > 0 else None)
+                    msg = (f"Hold for profit ON for {symbol}: Claude and the rules won't sell it. Safety stop "
+                           f"{fmt(pos['stop'])} ({stop_atr}x ATR below the high)"
+                           + (f", profit target {fmt(pos['take_profit'])} (+{take_profit_pct:g}%)." if pos["take_profit"] else
+                              ", no profit target."))
+                else:
+                    pos.update(hold=False, take_profit=None)
+                    self.state.pop("ai_basis", None)  # let Claude review the position at the next check
+                    msg = f"Hold for profit OFF: the bot manages {symbol} normally again."
+        self.log(msg)
+
     def buy_now(self, symbol: str, amount: float) -> None:
         """Manual 'buy now' from the UI. The bot then manages the position (trailing stop, exits)."""
         cfg = self.config
@@ -710,6 +758,8 @@ class Bot:
             atr_now = compute(candles, Params(atr_period=p.atr_period, trend_filter=False))["atr"][-1]
             self._buy(atr_now, p, "Manual buy", symbol=symbol, quote=amount,
                       stop_mult=p.atr_mult if not is_ai(cfg) else 3.0)
+            with self.lock:
+                self.state.pop("ai_basis", None)  # Claude takes a fresh look at the new position
             self._clear_error()
 
     def close_now(self) -> None:
@@ -759,6 +809,10 @@ class Bot:
                 status = "Waiting for the fast EMA to cross above the slow EMA."
             else:
                 status = "No signal data yet - start the bot to begin watching."
+            if pos and pos.get("hold"):
+                status = (f"Holding {pos.get('symbol') or cfg['symbol']} for profit (Hold is on): nothing sells it except "
+                          + (f"the profit target {fmt(pos['take_profit'])} or " if pos.get("take_profit") else "")
+                          + f"the safety stop {fmt(pos['stop'])}.")
             if rt["market_open"] is False:
                 status = "Stock market is closed. " + status
             return {

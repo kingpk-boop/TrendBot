@@ -484,6 +484,20 @@ def buy_now(bot_id: str, body: BuyIn):
     return bot.summary()
 
 
+class HoldIn(BaseModel):
+    hold: bool = True
+    take_profit_pct: float = Field(0.0, ge=0, le=1000)  # sell when this far above the buy price; 0 = no target
+    stop_atr: float = Field(6.0, ge=2, le=12)            # safety stop distance below the high, in ATRs
+
+
+@app.post("/api/bots/{bot_id}/hold")
+@managed(write=True)
+def hold_position(bot_id: str, body: HoldIn):
+    bot = manager.get(bot_id)
+    bot.set_hold(body.hold, body.take_profit_pct, body.stop_atr)
+    return bot.summary()
+
+
 @app.post("/api/bots/{bot_id}/close")
 @managed(write=True)
 def close_position(bot_id: str):
