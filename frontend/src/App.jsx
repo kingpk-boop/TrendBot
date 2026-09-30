@@ -169,6 +169,16 @@ export default function App() {
     setUnauthorizedHandler(() => setMeta(m => (m ? { ...m, logged_in: false } : m)));
   }, [reloadMeta]);
 
+  // While the website is open, it also runs the bot check about once a minute (backup for a late scheduler).
+  const selfTimer = !!(meta?.cloud && meta?.logged_in && !meta?.backtest_only && !meta?.needs_setup);
+  useEffect(() => {
+    if (!selfTimer) return;
+    const check = () => { if (!document.hidden) api("/cron/check", { method: "POST" }).catch(() => {}); };
+    check();
+    const t = setInterval(check, 60000);
+    return () => clearInterval(t);
+  }, [selfTimer]);
+
   const parts = (hash.replace(/^#\/?/, "") || (meta?.backtest_only ? "backtest" : "bots")).split("/");
   const tab = parts[0];
   useEffect(() => { window.scrollTo(0, 0); }, [hash]);
