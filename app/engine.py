@@ -46,7 +46,14 @@ STYLES = {
                    "Take reasonable setups instead of waiting for perfect ones; strong momentum leaders may be "
                    "bought even when stretched, but then use a tighter stop (1.5-2.5 ATR) and a smaller size; "
                    "rotate faster into the strongest market. Still never buy markets in clear downtrends."},
+    "active": {"min_confidence": 50, "brief": "Active: the owner wants the bot trading, not sitting in cash. When in "
+               "cash, buy the best setup on the watchlist (the strongest coin that is not in a clear downtrend), "
+               "sized by conviction (small when unsure) with a tight stop just below recent support; take quick "
+               "profits (often 1-4%) and re-enter on the next setup. Stay in cash only when every market is "
+               "falling hard or the daily loss cap is hit."},
 }
+# Hours in cash after which Claude is reminded that the owner wants trades, not idle cash (None = never).
+IDLE_NUDGE_H = {"careful": None, "balanced": 8, "aggressive": 3, "active": 0}
 
 
 def style_of(cfg: dict) -> str:
@@ -542,9 +549,28 @@ class Bot:
             "your_previous_decision": last, "recent_trades": recent,
             "your_track_record_by_market": record, "market_breadth": breadth,
             "owner_trading_style": STYLES[style_of(cfg)]["brief"],
+            **self._idle_note(),
             "min_confidence_to_buy": STYLES[style_of(cfg)]["min_confidence"],
             "watchlist": [dict((k, v) for k, v in s.items() if k != "atr") for s in snaps.values()],
         }
+
+    def _idle_note(self) -> dict:
+        """How long the bot has sat in cash, plus a reminder once that's longer than the owner wants."""
+        if self.state["position"]:
+            return {}
+        since = (self.state["trades"][-1]["time"] if self.state["trades"]
+                 else (self.state["log"][0]["time"] if self.state["log"] else None))
+        if not since:
+            return {}
+        hours = round((time.time() - datetime.fromisoformat(since).timestamp()) / 3600, 1)
+        limit = IDLE_NUDGE_H[style_of(self.config)]
+        out = {"hours_in_cash": hours}
+        if limit is not None and hours >= limit:
+            out["owner_note"] = (f"The bot has been idle in cash for {hours} hours and the owner wants it trading. "
+                                 "Unless every market is in a clear downtrend, pick the best available setup now and "
+                                 "buy it - smaller size and a tight stop if conviction is modest - instead of "
+                                 "waiting for a perfect one. Then manage it actively for profit.")
+        return out
 
     def tick_ai(self) -> None:
         cfg = self.config
@@ -643,10 +669,12 @@ class Bot:
         basis, last = self.state.get("ai_basis"), self.state.get("ai") or {}
         if not basis or not last.get("time"):
             return True
-        bold = style_of(self.config) == "aggressive"
+        bold = style_of(self.config) in ("aggressive", "active")
         move_trigger, held_trigger, heartbeat = (0.0075, 0.005, 3600) if bold else (0.015, 0.01, 4 * 3600)
         if self.state.get("position"):
             heartbeat = min(heartbeat, 3600)  # in a trade: review it at least hourly
+        elif "owner_note" in self._idle_note():
+            heartbeat = min(heartbeat, 1800)  # idle longer than the owner wants: look for a setup every 30 min
         if time.time() - datetime.fromisoformat(last["time"]).timestamp() >= heartbeat:
             return True
         closes = basis.get("closes", {})
