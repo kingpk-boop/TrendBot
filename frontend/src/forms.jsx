@@ -73,6 +73,7 @@ export function StrategyFields({ v, set, ai = false }) {
           <option value="careful">Careful - only the clearest setups</option>
           <option value="balanced">Balanced - good setups, no chasing</option>
           <option value="aggressive">Aggressive - trades more, more risk</option>
+          <option value="active">Active - always looking to be in a trade</option>
         </select></label>}
       {ai && <label className="field">AI model
         <select name="ai_model" value={v.ai_model || "opus"} onChange={set("ai_model")}>

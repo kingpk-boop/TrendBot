@@ -242,7 +242,7 @@ class BotConfigIn(StrategyFields):
     name: str = Field("", max_length=40)
     mode: str = "paper"
     brain: str = "ai"  # "ai" = Claude decides (AI Autopilot); "rules" = EMA crossover rules
-    style: str = "balanced"  # AI Autopilot: careful | balanced | aggressive
+    style: str = "balanced"  # AI Autopilot: careful | balanced | aggressive | active
     ai_model: str = "sonnet"  # AI Autopilot: "sonnet" (Sonnet 5, medium effort, cheaper) | "opus" (Opus 5.5/5, high)
     decide_every_min: int = 3  # AI Autopilot: scan every N minutes (asks Claude only on changes); 0 = each candle
     watchlist: list[str] = Field(default_factory=list, max_length=8)  # markets the AI Autopilot may trade
@@ -255,8 +255,8 @@ class BotConfigIn(StrategyFields):
             raise ValueError(f"mode must be one of {', '.join(MODES)}")
         if self.brain not in ("ai", "rules"):
             raise ValueError("brain must be 'ai' or 'rules'")
-        if self.style not in ("careful", "balanced", "aggressive"):
-            raise ValueError("style must be careful, balanced or aggressive")
+        if self.style not in ("careful", "balanced", "aggressive", "active"):
+            raise ValueError("style must be careful, balanced, aggressive or active")
         if self.ai_model not in ("opus", "sonnet"):
             raise ValueError("ai_model must be opus or sonnet")
         if self.decide_every_min not in (0, 3, 5, 15, 30, 60):
