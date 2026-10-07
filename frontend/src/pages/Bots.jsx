@@ -283,7 +283,9 @@ export function BotPage({ id }) {
 
       {c.mode === "live" && <div className="alert warn"><b>Live mode:</b> this bot trades real money on your {exLabel} account.</div>}
       {bot.error && <div className="alert error"><b>Problem:</b> {bot.error}{bot.running ? " The bot keeps retrying every minute." : ""}</div>}
-      {pos && !bot.running && <div className="alert warn">The bot is stopped but still holds a position. Nothing watches its trailing stop until you start it again or sell.</div>}
+      {pos && !bot.running && <div className="alert warn">The bot is stopped but still holds a position. {pos.xstop_id
+        ? `Its stop order at ${fmtPrice(pos.xstop_price)} stays on ${exLabel}, but it won't move up until you start the bot again.`
+        : "Nothing watches its trailing stop until you start it again or sell."}</div>}
 
       <div className="tiles">
         <Tile label="Status" value={<><span className={"dot " + (bot.error ? "err" : bot.running ? "on" : "")} /> {bot.running ? "Running" : "Stopped"}</>}
@@ -297,7 +299,7 @@ export function BotPage({ id }) {
         <Tile label="Position" value={pos ? `${fmtQty(pos.qty)}${c.brain === "ai" && pos.symbol ? " " + pos.symbol.split("/")[0] : ""}` : "None"}
           sub={pos ? `bought at ${fmtPrice(pos.entry_price)}${pos.hold ? " · holding for profit" + (pos.take_profit ? ` → ${fmtPrice(pos.take_profit)}` : "") : ""}` : c.brain === "ai" ? "in cash" : "waiting for a buy signal"} />
         <Tile label="Trailing stop" value={pos ? fmtPrice(pos.stop) : "—"}
-          sub={pos && bot.price ? `${fmtNum((bot.price / pos.stop - 1) * 100, 1)}% below price` : ""} />
+          sub={pos ? (pos.xstop_id ? `held on ${exLabel} as a stop order` : bot.price ? `${fmtNum((bot.price / pos.stop - 1) * 100, 1)}% below price` : "") : ""} />
         <Tile label="Open P&L" value={<span className={cls(bot.unrealized)}>{signed(bot.unrealized)}</span>} sub={pos ? q + " after sell fee" : ""} />
         <Tile label="Today" value={<span className={cls(bot.today_pnl)}>{signed(bot.today_pnl)}</span>} sub={`${q} closed trades`} />
         <Tile label="Total P&L" value={<span className={cls(bot.total_pnl)}>{signed(bot.total_pnl)}</span>} sub={`${bot.trades_count} trades, ${bot.wins} won`} />

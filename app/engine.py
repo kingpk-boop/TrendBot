@@ -30,6 +30,12 @@ MAX_LOG = 300
 
 MAX_TRADES = 5000
 DUST_USD = 1.0  # a leftover worth less than this after a sell counts as fully closed
+# Break-even lock: once a trade has been this far in profit, its stop never goes below the buy price plus
+# fees, so a winner can't turn into a loss (barring a price gap straight through the stop).
+BREAKEVEN_AFTER = 0.015
+# Move the exchange's stop order only when the bot's stop has risen at least this much (saves API calls).
+XSTOP_STEP = 0.002
+
 # AI Autopilot trading styles: the owner's appetite for risk. Buys below the style's confidence aren't executed.
 STYLES = {
     "careful": {"min_confidence": 70, "brief": "Careful: only the clearest, strongest setups; smaller size when "
@@ -254,6 +260,9 @@ class Bot:
         if not is_open:
             return  # stock market closed: nothing can fill
 
+        # 0) Did the exchange's stop order already sell it while we weren't looking?
+        self._check_exchange_stop()
+
         # 1) Trailing stop - checked every tick, not just at candle close.
         price = m.last_price(symbol)
         with self.lock:
@@ -264,12 +273,14 @@ class Bot:
                 pos["high"] = max(pos["high"], price)
                 if ind:
                     pos["stop"] = max(pos["stop"], pos["high"] - pos.get("stop_mult", p.atr_mult) * ind["atr"])
+                self._lock_breakeven(pos)
                 stop_hit = price <= pos["stop"]
                 stop = pos["stop"]
         if stop_hit:
             self._sell(f"Trailing stop hit (price {fmt(price)} at or below stop {fmt(stop)})")
         else:
             self._check_profit_target(price)
+        self._protect()
 
         # 2) Signals - only once a new candle has closed.
         tf_ms = TIMEFRAMES[tf] * 1000
@@ -377,6 +388,7 @@ class Bot:
             self._add_trade("buy", fill, reason, symbol=symbol)
         self.log(f"BUY {fill.qty:.8g} {symbol} at {fmt(fill.price)} for {fmt(fill.quote)}. "
                  f"Stop starts at {fmt(self.state['position']['stop'])}.")
+        self._protect()
 
     def _sell(self, reason: str) -> None:
         cfg = self.config
@@ -385,6 +397,12 @@ class Bot:
         if not pos:
             return
         symbol = pos.get("symbol") or cfg["symbol"]
+        if pos.get("xstop_id") and self._exchange_stops():
+            if not self.broker.cancel_stop(symbol, pos["xstop_id"]) and self._check_exchange_stop():
+                return  # the exchange's stop order already sold it
+            with self.lock:
+                if self.state["position"]:
+                    self.state["position"].update(xstop_id=None, xstop_price=None)
         try:
             fill = self.broker.sell(symbol, pos["qty"])
         except NothingToSell as exc:
@@ -525,7 +543,8 @@ class Bot:
         if not is_open:
             return
 
-        # 1) Protect the open position every minute: trailing stop.
+        # 1) Protect the open position every minute: exchange stop order, trailing stop, profit target.
+        self._check_exchange_stop()
         with self.lock:
             pos = self.state["position"]
             held = (pos.get("symbol") or cfg["symbol"]) if pos else None
@@ -537,11 +556,13 @@ class Bot:
                 pos["high"] = max(pos["high"], price)
                 if pos.get("atr"):
                     pos["stop"] = max(pos["stop"], pos["high"] - pos.get("stop_mult", 3.0) * pos["atr"])
+                self._lock_breakeven(pos)
                 stop, stop_hit = pos["stop"], price <= pos["stop"]
             if stop_hit:
                 self._sell(f"Trailing stop hit (price {fmt(price)} at or below stop {fmt(stop)})")
             else:
                 self._check_profit_target(price)
+            self._protect()
         if (self.state["position"] or {}).get("hold"):
             self.save()
             return  # "Hold for profit": the owner keeps this position; no need to ask Claude
@@ -685,10 +706,93 @@ class Bot:
             old = pos["stop"]
             pos.update(stop=new, atr=snap["atr"], stop_mult=min(pos.get("stop_mult", stop_atr), stop_atr))
         self.log(f"Stop tightened from {fmt(old)} to {fmt(new)} ({stop_atr}x ATR below the high).")
+        self._protect()
 
     def active_symbol(self) -> str:
         pos = self.state.get("position")
         return (pos.get("symbol") if pos else None) or self.config["symbol"]
+
+    # ------------------------------------------------------------------ protection: break-even + exchange stop
+
+    def _lock_breakeven(self, pos: dict) -> None:
+        """Call with self.lock held: once in enough profit, keep the stop at or above buy price + fees."""
+        if pos["high"] >= pos["entry_price"] * (1 + BREAKEVEN_AFTER):
+            fee = EXCHANGES[self.config["exchange"]]["fee"]
+            pos["stop"] = max(pos["stop"], pos["entry_price"] * (1 + 2 * fee + 0.002))
+
+    def _exchange_stops(self) -> bool:
+        return self.config["mode"] != "paper" and hasattr(self.broker, "place_stop")
+
+    def _exchange_label(self) -> str:
+        return EXCHANGES[self.config["exchange"]]["label"]
+
+    def _check_exchange_stop(self) -> bool:
+        """Has the exchange's stop order sold the position? If so, record the sale. True when closed."""
+        with self.lock:
+            pos = copy.deepcopy(self.state["position"])
+        if not pos or not pos.get("xstop_id") or not self._exchange_stops():
+            return False
+        symbol = pos.get("symbol") or self.config["symbol"]
+        if self.broker.stop_is_open(symbol, pos["xstop_id"]):
+            return False
+        fill = self.broker.sells_since(symbol, pos.get("xstop_time") or 0)
+        if not fill or fill.qty < pos["qty"] * 0.5:
+            with self.lock:  # cancelled outside the bot: place a new one at the next check
+                if self.state["position"]:
+                    self.state["position"].update(xstop_id=None, xstop_price=None)
+            return False
+        pnl = fill.quote - pos["cost"]
+        reason = f"Stop order on {self._exchange_label()} (stop {fmt(pos.get('xstop_price') or pos['stop'])})"
+        with self.lock:
+            self._add_trade("sell", fill, reason, pnl=pnl, cost=pos["cost"], symbol=symbol)
+            self.state["position"] = None
+        self.log(f"SELL {fill.qty:.8g} {symbol} at {fmt(fill.price)} ({reason}). "
+                 f"P&L {'+' if pnl >= 0 else ''}{fmt(pnl)}.", "trade")
+        return True
+
+    def _sync_exchange_stop(self, force: bool = False) -> None:
+        """Keep a real stop-loss order on the exchange at the bot's stop price (moved up as it rises)."""
+        if not self._exchange_stops():
+            return
+        with self.lock:
+            pos = copy.deepcopy(self.state["position"])
+        if not pos:
+            return
+        symbol, target = pos.get("symbol") or self.config["symbol"], pos["stop"]
+        current, oid = pos.get("xstop_price"), pos.get("xstop_id")
+        if oid and current and not force and target <= current * (1 + XSTOP_STEP):
+            return
+        if target >= self.market.last_price(symbol) * 0.999:
+            return  # stop at the price already: the bot's own check sells
+        if oid and not self.broker.cancel_stop(symbol, oid) and self._check_exchange_stop():
+            return
+        try:
+            new_id = self.broker.place_stop(symbol, pos["qty"], target)
+        except Exception as exc:
+            with self.lock:
+                if self.state["position"]:
+                    self.state["position"].update(xstop_id=None, xstop_price=None)
+            msg = str(exc) if isinstance(exc, MarketError) else f"{type(exc).__name__}: {str(exc)[:160]}"
+            if not pos.get("xstop_failed"):
+                self.log(f"Couldn't place the stop order on {self._exchange_label()} ({msg}). The bot keeps "
+                         "watching the stop itself at every check.", "warn")
+                with self.lock:
+                    if self.state["position"]:
+                        self.state["position"]["xstop_failed"] = True
+            return
+        with self.lock:
+            if self.state["position"]:
+                self.state["position"].update(xstop_id=new_id, xstop_price=target, xstop_failed=False,
+                                              xstop_time=int(time.time() * 1000))
+        self.log(f"Stop order {'moved' if oid else 'placed'} on {self._exchange_label()} at {fmt(target)}: "
+                 f"it sells there even between the bot's checks.")
+
+    def _protect(self) -> None:
+        """After each check: make sure the exchange holds the current stop (errors don't stop the bot)."""
+        try:
+            self._sync_exchange_stop()
+        except Exception as exc:
+            self.log(f"Stop order update failed ({type(exc).__name__}); will retry at the next check.", "warn")
 
     def _check_profit_target(self, price: float) -> None:
         with self.lock:
@@ -730,6 +834,10 @@ class Bot:
                     self.state.pop("ai_basis", None)  # let Claude review the position at the next check
                     msg = f"Hold for profit OFF: the bot manages {symbol} normally again."
         self.log(msg)
+        try:
+            self._sync_exchange_stop(force=True)  # the stop may have moved down (wider) or up
+        except Exception as exc:
+            self.log(f"Stop order update failed ({type(exc).__name__}); will retry at the next check.", "warn")
 
     def buy_now(self, symbol: str, amount: float) -> None:
         """Manual 'buy now' from the UI. The bot then manages the position (trailing stop, exits)."""

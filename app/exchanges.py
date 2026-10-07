@@ -223,6 +223,50 @@ class CcxtMarket:
         return Fill(qty=filled, price=price, quote=cost - fee, fee=fee)
 
 
+    # ---------------------------------------------------------------- stop orders held by the exchange
+    # The bot keeps a real stop-loss sell order on the exchange, so the position is protected even when
+    # the website isn't checked for a while. The bot moves it up as its trailing stop rises.
+
+    def place_stop(self, symbol: str, qty: float, stop_price: float) -> str:
+        """Place a market sell that triggers when the price falls to stop_price. Returns the order id."""
+        amount = float(self.ex.amount_to_precision(symbol, qty))
+        if amount <= 0:
+            raise MarketError("Position too small for a stop order.")
+        price = float(self.ex.price_to_precision(symbol, stop_price))
+        order = self.ex.create_order(symbol, "market", "sell", amount, None, {"triggerPrice": price})
+        return str(order["id"])
+
+    def _stop_params(self) -> dict:
+        return {"trigger": True} if self.exchange_id == "bybit" else {}
+
+    def cancel_stop(self, symbol: str, order_id: str) -> bool:
+        """Cancel the stop order. False if it's no longer open (it may have triggered)."""
+        try:
+            self.ex.cancel_order(order_id, symbol, self._stop_params())
+            return True
+        except ccxt.OrderNotFound:
+            return False
+        except ccxt.InvalidOrder:
+            return False
+
+    def stop_is_open(self, symbol: str, order_id: str) -> bool:
+        orders = self.ex.fetch_open_orders(symbol, None, None, self._stop_params())
+        return any(str(o.get("id")) == str(order_id) for o in orders)
+
+    def sells_since(self, symbol: str, since_ms: int) -> Fill | None:
+        """Sells on this market since since_ms (to read the fill of a triggered stop order)."""
+        quote = self._market(symbol)["quote"]
+        trades = [t for t in self.ex.fetch_my_trades(symbol, since_ms - 60_000) if t.get("side") == "sell"
+                  and (t.get("timestamp") or 0) >= since_ms - 60_000]
+        if not trades:
+            return None
+        qty = sum(float(t.get("amount") or 0) for t in trades)
+        gross = sum(float(t.get("cost") or 0) for t in trades)
+        fee = sum(float((t.get("fee") or {}).get("cost") or 0) for t in trades
+                  if (t.get("fee") or {}).get("currency") == quote)
+        return Fill(qty=qty, price=gross / qty if qty else 0.0, quote=gross - fee, fee=fee) if qty else None
+
+
 # --------------------------------------------------------------------------- stocks (Alpaca)
 
 ALPACA_TF = {"1h": "1Hour", "4h": "4Hour", "1d": "1Day"}
