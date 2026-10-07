@@ -298,8 +298,10 @@ export function BotPage({ id }) {
             sub={ind ? `fast ${fmtPrice(ind.fast)} / slow ${fmtPrice(ind.slow)}` : "after first candle"} />}
         <Tile label="Position" value={pos ? `${fmtQty(pos.qty)}${c.brain === "ai" && pos.symbol ? " " + pos.symbol.split("/")[0] : ""}` : "None"}
           sub={pos ? `bought at ${fmtPrice(pos.entry_price)}${pos.hold ? " · holding for profit" + (pos.take_profit ? ` → ${fmtPrice(pos.take_profit)}` : "") : ""}` : c.brain === "ai" ? "in cash" : "waiting for a buy signal"} />
-        <Tile label="Trailing stop" value={pos ? fmtPrice(pos.stop) : "—"}
-          sub={pos ? (pos.xstop_id ? `held on ${exLabel} as a stop order` : bot.price ? `${fmtNum((bot.price / pos.stop - 1) * 100, 1)}% below price` : "") : ""} />
+        <Tile label={pos?.ai_managed ? "Claude's stop" : "Trailing stop"} value={pos ? fmtPrice(pos.stop) : "—"}
+          sub={pos ? [bot.price ? `${fmtNum((bot.price / pos.stop - 1) * 100, 1)}% below price` : "",
+                      pos.ai_managed && pos.take_profit && !pos.hold ? `target ${fmtPrice(pos.take_profit)}` : "",
+                      pos.xstop_id ? `on ${exLabel}` : ""].filter(Boolean).join(" · ") : ""} />
         <Tile label="Open P&L" value={<span className={cls(bot.unrealized)}>{signed(bot.unrealized)}</span>} sub={pos ? q + " after sell fee" : ""} />
         <Tile label="Today" value={<span className={cls(bot.today_pnl)}>{signed(bot.today_pnl)}</span>} sub={`${q} closed trades`} />
         <Tile label="Total P&L" value={<span className={cls(bot.total_pnl)}>{signed(bot.total_pnl)}</span>} sub={`${bot.trades_count} trades, ${bot.wins} won`} />
@@ -309,7 +311,7 @@ export function BotPage({ id }) {
         <div className="card-head"><h2><span className="ai-mark">AI</span> Claude's latest decision</h2>
           <span className="muted small">{bot.ai_decision.model ? bot.ai_decision.model + " · " : ""}{fmtTime(bot.ai_decision.time)}</span></div>
         <p style={{ margin: "0 0 6px" }}><b>{bot.ai_decision.action.toUpperCase()}{bot.ai_decision.symbol ? " " + bot.ai_decision.symbol : ""}</b>
-          {" "}· {bot.ai_decision.confidence}% sure{bot.ai_decision.action === "buy" ? ` · ${bot.ai_decision.size_pct}% of max size · stop ${bot.ai_decision.stop_atr}× ATR` : ""}</p>
+          {" "}· {bot.ai_decision.confidence}% sure{bot.ai_decision.action === "buy" ? ` · ${bot.ai_decision.size_pct}% of max size · stop ${bot.ai_decision.stop_pct}% below${bot.ai_decision.take_profit_pct ? ` · target +${bot.ai_decision.take_profit_pct}%` : ""}` : ""}</p>
         <div className="ai-text">{bot.ai_decision.reason}</div>
         {bot.ai_decision.outlook && <p className="muted small" style={{ marginBottom: 0 }}>Market view: {bot.ai_decision.outlook}</p>}
       </div>}

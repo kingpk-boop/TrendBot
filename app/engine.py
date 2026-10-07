@@ -374,20 +374,28 @@ class Bot:
         return None
 
     def _buy(self, atr_value: float, p: Params, reason: str = "EMA cross up", symbol: str | None = None,
-             quote: float | None = None, stop_mult: float | None = None) -> None:
+             quote: float | None = None, stop_mult: float | None = None, stop_pct: float | None = None,
+             take_profit_pct: float = 0.0) -> None:
+        """Buy. Rule bots get an ATR trailing stop. With stop_pct the stop is a fixed % below the fill price
+        and the AI manages it from then on (no automatic trailing)."""
         cfg = self.config
         symbol = symbol or cfg["symbol"]
         mult = stop_mult or p.atr_mult
         fill = self.broker.buy(symbol, float(quote or cfg["trade_size"]))
+        ai_managed = stop_pct is not None
+        stop = fill.price * (1 - stop_pct / 100) if ai_managed else fill.price - mult * atr_value
         with self.lock:
             self.state["position"] = {
                 "symbol": symbol, "qty": fill.qty, "entry_price": fill.price, "cost": fill.quote,
-                "entry_time": utc_now_iso(), "high": fill.price, "stop": fill.price - mult * atr_value,
-                "atr": atr_value, "stop_mult": mult,
+                "entry_time": utc_now_iso(), "high": fill.price, "stop": stop,
+                "atr": None if ai_managed else atr_value, "stop_mult": None if ai_managed else mult,
+                "ai_managed": ai_managed,
+                "take_profit": fill.price * (1 + take_profit_pct / 100) if take_profit_pct > 0 else None,
             }
             self._add_trade("buy", fill, reason, symbol=symbol)
+        tp = self.state["position"]["take_profit"]
         self.log(f"BUY {fill.qty:.8g} {symbol} at {fmt(fill.price)} for {fmt(fill.quote)}. "
-                 f"Stop starts at {fmt(self.state['position']['stop'])}.")
+                 f"Stop at {fmt(self.state['position']['stop'])}" + (f", target {fmt(tp)}." if tp else "."))
         self._protect()
 
     def _sell(self, reason: str) -> None:
@@ -505,7 +513,11 @@ class Bot:
             price = snaps.get(sym, {}).get("close") or self.runtime.get("price") or pos["entry_price"]
             held = {"symbol": sym, "entry_price": pos["entry_price"], "price_now": price,
                     "pnl_pct": round((price / pos["entry_price"] - 1) * 100, 2), "entry_time": pos["entry_time"],
-                    "trailing_stop": pos["stop"], "stop_atr": pos.get("stop_mult")}
+                    "highest_since_buy": pos["high"], "your_stop": pos["stop"],
+                    "stop_pct_below_price": round((1 - pos["stop"] / price) * 100, 2),
+                    "stop_vs_buy_price_pct": round((pos["stop"] / pos["entry_price"] - 1) * 100, 2),
+                    "your_target": pos.get("take_profit"),
+                    "atr_pct": snaps.get(sym, {}).get("atr_pct")}
         cap, today = float(cfg["daily_loss_cap"]), self.today_pnl()
         quote = EXCHANGES[cfg["exchange"]]
         with self.lock:
@@ -554,12 +566,13 @@ class Bot:
                 self.runtime.update(price=price, price_time=utc_now_iso())
                 pos = self.state["position"]
                 pos["high"] = max(pos["high"], price)
-                if pos.get("atr"):
-                    pos["stop"] = max(pos["stop"], pos["high"] - pos.get("stop_mult", 3.0) * pos["atr"])
-                self._lock_breakeven(pos)
+                if not pos.get("ai_managed"):  # rule-style trailing; Claude moves its own stops itself
+                    if pos.get("atr"):
+                        pos["stop"] = max(pos["stop"], pos["high"] - (pos.get("stop_mult") or 3.0) * pos["atr"])
+                    self._lock_breakeven(pos)
                 stop, stop_hit = pos["stop"], price <= pos["stop"]
             if stop_hit:
-                self._sell(f"Trailing stop hit (price {fmt(price)} at or below stop {fmt(stop)})")
+                self._sell(f"Stop hit (price {fmt(price)} at or below stop {fmt(stop)})")
             else:
                 self._check_profit_target(price)
             self._protect()
@@ -569,6 +582,8 @@ class Bot:
 
         # 2) Once per new candle - or every N minutes when set - look at the market and ask Claude.
         every_min = int(cfg.get("decide_every_min") or 0)
+        if self.state["position"] and not every_min:
+            every_min = 5  # while in a trade, Claude watches it closely (still only asked when something moves)
         tf_ms = every_min * 60_000 if every_min else TIMEFRAMES[cfg["timeframe"]] * 1000
         candle = int(time.time() * 1000) // tf_ms * tf_ms
         last = self.state["last_candle"]
@@ -609,7 +624,8 @@ class Bot:
         with self.lock:
             self.state["ai"] = {"time": utc_now_iso(), "model": ai.MODEL_NAMES.get(model, model),
                                 "action": d.action, "symbol": d.symbol,
-                                "confidence": d.confidence, "size_pct": d.size_pct, "stop_atr": d.stop_atr,
+                                "confidence": d.confidence, "size_pct": d.size_pct, "stop_pct": d.stop_pct,
+                                "take_profit_pct": d.take_profit_pct,
                                 "reason": d.reason, "outlook": d.outlook}
             self.state["last_candle"] = candle
             self.state["ai_basis"] = {"closes": {sym: sn["close"] for sym, sn in snaps.items()},
@@ -629,6 +645,8 @@ class Bot:
             return True
         bold = style_of(self.config) == "aggressive"
         move_trigger, held_trigger, heartbeat = (0.0075, 0.005, 3600) if bold else (0.015, 0.01, 4 * 3600)
+        if self.state.get("position"):
+            heartbeat = min(heartbeat, 3600)  # in a trade: review it at least hourly
         if time.time() - datetime.fromisoformat(last["time"]).timestamp() >= heartbeat:
             return True
         closes = basis.get("closes", {})
@@ -659,8 +677,8 @@ class Bot:
         label = f"{model}: {d.action.upper()}{' ' + d.symbol if d.symbol else ''} ({d.confidence}% sure). {d.reason}"
         if d.action == "hold" or (d.action == "buy" and d.symbol == held):
             self.log(label)
-            if held and d.action == "hold" and d.stop_atr > 0 and held in snaps:
-                self._tighten_stop(d.stop_atr, snaps[held])
+            if held and held in snaps:
+                self._set_ai_levels(d.stop_pct, d.take_profit_pct, snaps[held]["close"])
             return
         if d.action == "sell":
             if held:
@@ -692,21 +710,34 @@ class Bot:
         quote = round(min(max_quote, max(max_quote * d.size_pct / 100, floor)), 2)
         self.log(label)
         self._buy(snap["atr"], Params(), f"AI buy ({d.confidence}%, {d.size_pct}% size)", symbol=d.symbol,
-                  quote=quote, stop_mult=d.stop_atr)
+                  quote=quote, stop_pct=d.stop_pct, take_profit_pct=d.take_profit_pct)
 
-    def _tighten_stop(self, stop_atr: float, snap: dict) -> None:
-        """Move the trailing stop up at the AI's request - never down, and never above the price."""
+    def _set_ai_levels(self, stop_pct: float, take_profit_pct: float, price: float) -> None:
+        """Claude moves its stop (up or down) and/or its profit target. The stop stays below the price and
+        never more than the hard limit below the buy price."""
+        changes = []
         with self.lock:
             pos = self.state["position"]
             if not pos:
                 return
-            new = pos["high"] - stop_atr * snap["atr"]
-            if new <= pos["stop"] or new >= snap["close"]:
-                return
-            old = pos["stop"]
-            pos.update(stop=new, atr=snap["atr"], stop_mult=min(pos.get("stop_mult", stop_atr), stop_atr))
-        self.log(f"Stop tightened from {fmt(old)} to {fmt(new)} ({stop_atr}x ATR below the high).")
-        self._protect()
+            if stop_pct > 0:
+                floor = pos["entry_price"] * (1 - ai.MAX_LOSS_PCT / 100)
+                new = min(price * (1 - stop_pct / 100), price * 0.998)
+                new = max(new, floor)
+                if abs(new / pos["stop"] - 1) >= 0.0005:
+                    changes.append(f"stop {fmt(pos['stop'])} → {fmt(new)}")
+                    pos.update(stop=new, ai_managed=True, atr=None, stop_mult=None)
+            if take_profit_pct > 0:
+                target = pos["entry_price"] * (1 + take_profit_pct / 100)
+                if target > price * 1.001 and (not pos.get("take_profit") or abs(target / pos["take_profit"] - 1) >= 0.0005):
+                    changes.append(f"target → {fmt(target)}")
+                    pos["take_profit"] = target
+        if changes:
+            self.log("Claude moved its levels: " + ", ".join(changes) + ".")
+            try:
+                self._sync_exchange_stop(force=True)
+            except Exception as exc:
+                self.log(f"Stop order update failed ({type(exc).__name__}); will retry at the next check.", "warn")
 
     def active_symbol(self) -> str:
         pos = self.state.get("position")
@@ -823,14 +854,14 @@ class Bot:
                 pos = self.state["position"]
                 if hold:
                     stop_atr = max(2.0, min(12.0, float(stop_atr)))
-                    pos.update(hold=True, atr=atr_now, stop_mult=stop_atr, stop=pos["high"] - stop_atr * atr_now,
+                    pos.update(hold=True, ai_managed=False, atr=atr_now, stop_mult=stop_atr, stop=pos["high"] - stop_atr * atr_now,
                                take_profit=pos["entry_price"] * (1 + take_profit_pct / 100) if take_profit_pct > 0 else None)
                     msg = (f"Hold for profit ON for {symbol}: Claude and the rules won't sell it. Safety stop "
                            f"{fmt(pos['stop'])} ({stop_atr}x ATR below the high)"
                            + (f", profit target {fmt(pos['take_profit'])} (+{take_profit_pct:g}%)." if pos["take_profit"] else
                               ", no profit target."))
                 else:
-                    pos.update(hold=False, take_profit=None)
+                    pos.update(hold=False, take_profit=None, ai_managed=is_ai(self.config))
                     self.state.pop("ai_basis", None)  # let Claude review the position at the next check
                     msg = f"Hold for profit OFF: the bot manages {symbol} normally again."
         self.log(msg)
@@ -864,8 +895,10 @@ class Bot:
                 raise MarketError(f"Not enough price history for {symbol}.")
             p = Params.from_config(cfg)
             atr_now = compute(candles, Params(atr_period=p.atr_period, trend_filter=False))["atr"][-1]
-            self._buy(atr_now, p, "Manual buy", symbol=symbol, quote=amount,
-                      stop_mult=p.atr_mult if not is_ai(cfg) else 3.0)
+            if is_ai(cfg):  # starter stop 3% below; Claude sets its own levels at the next check
+                self._buy(atr_now, p, "Manual buy", symbol=symbol, quote=amount, stop_pct=3.0)
+            else:
+                self._buy(atr_now, p, "Manual buy", symbol=symbol, quote=amount, stop_mult=p.atr_mult)
             with self.lock:
                 self.state.pop("ai_basis", None)  # Claude takes a fresh look at the new position
             self._clear_error()
@@ -901,8 +934,8 @@ class Bot:
             unrealized = pos["qty"] * price * (1 - fee) - pos["cost"] if pos and price else None
             decision = copy.deepcopy(st.get("ai"))
             if is_ai(cfg):
-                status = (f"Holding {pos.get('symbol') or cfg['symbol']}. Claude reviews the watchlist at every new "
-                          f"{cfg['timeframe']} candle; the trailing stop is checked every minute." if pos else
+                status = (f"Holding {pos.get('symbol') or cfg['symbol']}. Claude manages the trade - it sets and moves "
+                          f"its own stop and target, and decides when to take profit." if pos else
                           f"In cash, watching {', '.join(bot_symbols(cfg))}. " +
                           (f"Scans every {cfg['decide_every_min']} min and asks Claude when something changes."
                            if cfg.get("decide_every_min") else f"Claude decides at every new {cfg['timeframe']} candle."))
